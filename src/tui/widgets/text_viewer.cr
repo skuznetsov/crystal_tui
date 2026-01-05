@@ -60,6 +60,9 @@ module Tui
       text_style = Style.new(fg: @text_color)
       line_num_style = Style.new(fg: @line_number_color)
 
+      # Clear entire area first (important for overlay)
+      clear_background(buffer, clip, text_style)
+
       # Draw border
       draw_border(buffer, clip, border, style)
 
@@ -71,6 +74,14 @@ module Tui
 
       # Draw scroll indicator
       draw_scroll_indicator(buffer, clip, style)
+    end
+
+    private def clear_background(buffer : Buffer, clip : Rect, style : Style) : Nil
+      @rect.height.times do |y|
+        @rect.width.times do |x|
+          draw_char(buffer, clip, @rect.x + x, @rect.y + y, ' ', style)
+        end
+      end
     end
 
     private def draw_border(buffer : Buffer, clip : Rect, border, style : Style) : Nil

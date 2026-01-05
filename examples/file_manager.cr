@@ -155,8 +155,8 @@ class FileManagerApp < Tui::App
 
   private def view_file(path : Path) : Nil
     viewer = Tui::TextViewer.new(id: "viewer")
-    viewer.border_style = Tui::Panel::BorderStyle::Double
-    viewer.border_color = Tui::Color.yellow
+    viewer.border_style = Tui::Panel::BorderStyle::Light
+    viewer.border_color = Tui::Color.cyan
     viewer.focused = true
     viewer.load_file(path)
     viewer.on_close { close_viewer }
