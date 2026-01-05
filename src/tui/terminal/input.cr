@@ -112,7 +112,7 @@ module Tui
 
       # Regular character
       char = @buffer.shift.unsafe_chr
-      return KeyEvent.new(char: char)
+      return KeyEvent.new(char)  # Positional to call char_to_key constructor
     end
 
     private def parse_escape_sequence : Event?
@@ -127,7 +127,7 @@ module Tui
         # Alt + key
         @buffer.shift  # Remove ESC
         char = @buffer.shift.unsafe_chr
-        return KeyEvent.new(char: char, modifiers: Modifiers::Alt)
+        return KeyEvent.new(char, Modifiers::Alt)  # Positional to call char_to_key constructor
       end
     end
 
@@ -135,12 +135,36 @@ module Tui
     private def parse_csi_sequence : Event?
       return nil if @buffer.size < 3
 
-      # Remove ESC [
-      @buffer.shift
-      @buffer.shift
+      # First, find the terminating byte WITHOUT consuming the buffer
+      # CSI sequences end with a letter (A-Z, a-z) or ~
+      term_idx = -1
+      (2...@buffer.size).each do |i|
+        byte = @buffer[i]
+        # Check if this is a terminating byte (letter or ~)
+        if (byte >= 'A'.ord && byte <= 'Z'.ord) ||
+           (byte >= 'a'.ord && byte <= 'z'.ord) ||
+           byte == BYTE_TILDE
+          term_idx = i
+          break
+        end
+        # If it's not a digit, semicolon, or '<', it's invalid
+        unless (byte >= BYTE_0 && byte <= BYTE_9) || byte == BYTE_SEMICOLON || byte == BYTE_LESS_THAN
+          # Unknown byte in sequence - consume ESC [ and return nil
+          @buffer.shift
+          @buffer.shift
+          return nil
+        end
+      end
+
+      # If no terminator found yet, wait for more input
+      return nil if term_idx == -1
+
+      # Now we have a complete sequence, consume it
+      @buffer.shift  # ESC
+      @buffer.shift  # [
 
       # Check for mouse event (SGR format: <button;x;y;M or m)
-      if @buffer[0] == BYTE_LESS_THAN
+      if @buffer[0]? == BYTE_LESS_THAN
         return parse_sgr_mouse
       end
 
@@ -157,17 +181,35 @@ module Tui
           params << current
           current = 0
         elsif byte == BYTE_UPPER_A  # Up
-          return KeyEvent.new(Key::Up, modifiers_from_param(params[0]?))
+          params << current
+          return KeyEvent.new(Key::Up, modifiers_from_params(params))
         elsif byte == BYTE_UPPER_B  # Down
-          return KeyEvent.new(Key::Down, modifiers_from_param(params[0]?))
+          params << current
+          return KeyEvent.new(Key::Down, modifiers_from_params(params))
         elsif byte == BYTE_UPPER_C  # Right
-          return KeyEvent.new(Key::Right, modifiers_from_param(params[0]?))
+          params << current
+          return KeyEvent.new(Key::Right, modifiers_from_params(params))
         elsif byte == BYTE_UPPER_D  # Left
-          return KeyEvent.new(Key::Left, modifiers_from_param(params[0]?))
+          params << current
+          return KeyEvent.new(Key::Left, modifiers_from_params(params))
         elsif byte == BYTE_UPPER_H  # Home
-          return KeyEvent.new(Key::Home, modifiers_from_param(params[0]?))
+          params << current
+          return KeyEvent.new(Key::Home, modifiers_from_params(params))
         elsif byte == BYTE_UPPER_F  # End
-          return KeyEvent.new(Key::End, modifiers_from_param(params[0]?))
+          params << current
+          return KeyEvent.new(Key::End, modifiers_from_params(params))
+        elsif byte == BYTE_UPPER_P  # F1 (with modifiers, CSI format)
+          params << current
+          return KeyEvent.new(Key::F1, modifiers_from_params(params))
+        elsif byte == BYTE_UPPER_Q  # F2 (with modifiers, CSI format)
+          params << current
+          return KeyEvent.new(Key::F2, modifiers_from_params(params))
+        elsif byte == BYTE_UPPER_R  # F3 (with modifiers, CSI format)
+          params << current
+          return KeyEvent.new(Key::F3, modifiers_from_params(params))
+        elsif byte == BYTE_UPPER_S  # F4 (with modifiers, CSI format)
+          params << current
+          return KeyEvent.new(Key::F4, modifiers_from_params(params))
         elsif byte == BYTE_TILDE
           params << current
           return parse_tilde_sequence(params)
@@ -311,6 +353,19 @@ module Tui
       modifiers |= Modifiers::Alt if code & 2 != 0
       modifiers |= Modifiers::Ctrl if code & 4 != 0
       modifiers
+    end
+
+    # Extract modifiers from params array
+    # Format: ESC [ param1 ; modifier_param X
+    # modifier_param is typically params[1], or params.last if multiple params
+    private def modifiers_from_params(params : Array(Int32)) : Modifiers
+      # If we have 2+ params, modifier is in the last one (typically params[1])
+      # Format: ESC [ 1 ; 2 A  means params = [1, 2], modifier = 2
+      if params.size >= 2
+        modifiers_from_param(params[1])
+      else
+        Modifiers::None
+      end
     end
   end
 end
