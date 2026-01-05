@@ -13,16 +13,18 @@ module Tui
     @cursor : Int32 = 0
     @scroll : Int32 = 0
 
-    # Style
+    # Style - MC classic colors
     property border_style : Panel::BorderStyle = Panel::BorderStyle::Light
-    property border_color : Color = Color.white
+    property border_color : Color = Color.cyan
     property active_border_color : Color = Color.cyan
-    property title_color : Color = Color.yellow
+    property title_color : Color = Color.cyan
     property title_align : Label::Align = Label::Align::Left
     property title_truncate : TitleTruncate = TitleTruncate::Start
+    property bg_color : Color = Color.blue
     property dir_color : Color = Color.white
-    property file_color : Color = Color.default
-    property cursor_color : Color = Color.cyan
+    property file_color : Color = Color.cyan
+    property cursor_color : Color = Color.cyan    # fg when on cursor
+    property cursor_bg : Color = Color.cyan       # bg of cursor line
     property selected_color : Color = Color.yellow
 
     # Multi-selection
@@ -207,20 +209,22 @@ module Tui
         entry = @entries[entry_idx]
         y = inner.y + i
 
-        # Determine style
+        # Determine style - MC colors
         is_cursor = entry_idx == @cursor && focused?
         is_selected = @selected.includes?(entry_idx)
 
         bg = if is_cursor
-               @cursor_color
+               @cursor_bg
              elsif is_selected
-               @selected_color
+               @bg_color  # Keep blue bg for selected, just change fg
              else
-               Color.default
+               @bg_color
              end
 
         fg = if is_cursor
                Color.black
+             elsif is_selected
+               @selected_color
              elsif entry.is_dir
                @dir_color
              else
@@ -228,7 +232,7 @@ module Tui
              end
 
         style = Style.new(fg: fg, bg: bg)
-        dir_style = if entry.is_dir && !is_cursor
+        dir_style = if entry.is_dir && !is_cursor && !is_selected
                       Style.new(fg: fg, bg: bg, attrs: Attributes::Bold)
                     else
                       nil
@@ -266,10 +270,11 @@ module Tui
         draw_char(buffer, clip, x, y, ' ', style) if x < inner.right
       end
 
-      # Fill empty lines
+      # Fill empty lines with background color
+      bg_style = Style.new(fg: @file_color, bg: @bg_color)
       ((inner.y + visible_count)...inner.bottom).each do |y|
         inner.width.times do |i|
-          draw_char(buffer, clip, inner.x + i, y, ' ', Style.new)
+          draw_char(buffer, clip, inner.x + i, y, ' ', bg_style)
         end
       end
     end

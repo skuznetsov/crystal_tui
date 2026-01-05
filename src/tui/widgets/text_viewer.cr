@@ -7,10 +7,11 @@ module Tui
 
     property title : String = ""
     property border_style : Panel::BorderStyle = Panel::BorderStyle::Light
-    property border_color : Color = Color.white
-    property title_color : Color = Color.yellow
-    property text_color : Color = Color.white
-    property line_number_color : Color = Color.cyan
+    property border_color : Color = Color.cyan
+    property title_color : Color = Color.cyan
+    property bg_color : Color = Color.blue
+    property text_color : Color = Color.cyan
+    property line_number_color : Color = Color.yellow
     property show_line_numbers : Bool = true
 
     # Callback when viewer should close
@@ -55,13 +56,13 @@ module Tui
       return if @rect.empty?
 
       border = Panel::BORDERS[@border_style]
-      style = Style.new(fg: @border_color)
-      title_style = Style.new(fg: @title_color, attrs: Attributes::Bold)
-      text_style = Style.new(fg: @text_color)
-      line_num_style = Style.new(fg: @line_number_color)
+      style = Style.new(fg: @border_color, bg: @bg_color)
+      title_style = Style.new(fg: @title_color, bg: @bg_color, attrs: Attributes::Bold)
+      text_style = Style.new(fg: @text_color, bg: @bg_color)
+      line_num_style = Style.new(fg: @line_number_color, bg: @bg_color)
 
       # Clear entire area first (important for overlay)
-      clear_background(buffer, clip, text_style)
+      clear_background(buffer, clip, Style.new(bg: @bg_color))
 
       # Draw border
       draw_border(buffer, clip, border, style)
