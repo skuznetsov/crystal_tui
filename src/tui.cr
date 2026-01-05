@@ -28,6 +28,9 @@ require "./tui/layout/rect"
 require "./tui/layout/dimension"
 require "./tui/layout/flex"
 
+# CSS
+require "./tui/css/parser"
+
 # Widgets
 require "./tui/reactive"
 require "./tui/widget"
