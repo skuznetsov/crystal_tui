@@ -26,12 +26,19 @@ module Tui
       Spaces    # Just spaces around title
     end
 
+    enum TitleTruncate
+      End     # Very long tit…
+      Center  # Very…title
+      Start   # …long title
+    end
+
     property title : String = ""
     property border_style : BorderStyle = BorderStyle::Light
     property border_color : Color = Color.white
     property title_color : Color = Color.yellow
     property title_align : Label::Align = Label::Align::Left
     property title_decor : TitleStyle = TitleStyle::Brackets  # Default to brackets
+    property title_truncate : TitleTruncate = TitleTruncate::End
     property padding : Int32 = 0
 
     # Content widget (single child)
@@ -97,7 +104,7 @@ module Tui
                                   end
 
         available = @rect.width - 4  # 2 corners + minimum padding
-        display_title = @title.size > available ? @title[0, available - 1] + "…" : @title
+        display_title = truncate_title(@title, available)
         full_title = "#{decor_left}#{display_title}#{decor_right}"
 
         title_start = case @title_align
@@ -163,6 +170,24 @@ module Tui
 
     private def draw_if_visible(buffer : Buffer, clip : Rect, x : Int32, y : Int32, char : Char, style : Style) : Nil
       buffer.set(x, y, char, style) if clip.contains?(x, y)
+    end
+
+    private def truncate_title(text : String, max_len : Int32) : String
+      return text if text.size <= max_len
+      return "…" if max_len <= 1
+
+      case @title_truncate
+      when .end?
+        text[0, max_len - 1] + "…"
+      when .center?
+        left_len = (max_len - 1) // 2
+        right_len = max_len - 1 - left_len
+        text[0, left_len] + "…" + text[-(right_len)..]
+      when .start?
+        "…" + text[-(max_len - 1)..]
+      else
+        text[0, max_len - 1] + "…"
+      end
     end
 
     def handle_event(event : Event) : Bool
