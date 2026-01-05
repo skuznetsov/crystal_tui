@@ -1,0 +1,20 @@
+# Crystal build artifacts
+/bin/
+/lib/
+/.shards/
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Debug symbols
+*.dwarf
+
+# Dependencies lock (optional - some prefer to track this)
+# shard.lock
