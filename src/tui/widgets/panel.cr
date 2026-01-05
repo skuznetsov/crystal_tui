@@ -10,12 +10,14 @@ module Tui
       Ascii    # - | + + + +
     end
 
+    # Border characters: tl_title = left of title, tr_title = right of title
+    # ┤ receives line from left, ├ sends line to right
     BORDERS = {
       BorderStyle::Light  => {h: '─', v: '│', tl: '┌', tr: '┐', bl: '└', br: '┘', tl_title: '┤', tr_title: '├'},
       BorderStyle::Heavy  => {h: '━', v: '┃', tl: '┏', tr: '┓', bl: '┗', br: '┛', tl_title: '┫', tr_title: '┣'},
       BorderStyle::Double => {h: '═', v: '║', tl: '╔', tr: '╗', bl: '╚', br: '╝', tl_title: '╡', tr_title: '╞'},
       BorderStyle::Round  => {h: '─', v: '│', tl: '╭', tr: '╮', bl: '╰', br: '╯', tl_title: '┤', tr_title: '├'},
-      BorderStyle::Ascii  => {h: '-', v: '|', tl: '+', tr: '+', bl: '+', br: '+', tl_title: '|', tr_title: '|'},
+      BorderStyle::Ascii  => {h: '-', v: '|', tl: '+', tr: '+', bl: '+', br: '+', tl_title: ']', tr_title: '['},
     }
 
     enum TitleStyle
@@ -87,8 +89,9 @@ module Tui
 
       if !@title.empty?
         # Calculate decoration overhead
+        # Brackets connect directly to horizontal line, space only between bracket and title
         decor_left, decor_right = case @title_decor
-                                  when .brackets? then {" #{border[:tl_title]} ", " #{border[:tr_title]} "}
+                                  when .brackets? then {"#{border[:tl_title]} ", " #{border[:tr_title]}"}
                                   when .spaces?   then {" ", " "}
                                   else                 {"", ""}
                                   end
