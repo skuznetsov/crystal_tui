@@ -17,9 +17,11 @@ class FileManagerApp < Tui::App
     @right_panel.border_style = Tui::Panel::BorderStyle::Round
     @right_panel.title_align = Tui::Label::Align::Center
 
-    # Set initial focus
+    # Set initial focus (use direct property for init, focus/blur for runtime changes)
     @left_panel.focused = true
     @right_panel.focused = false
+    @left_panel.focusable = true
+    @right_panel.focusable = true
 
     # File activation callback
     @left_panel.on_activate { |entry| view_file(@left_panel.path / entry.name) }
@@ -66,12 +68,12 @@ class FileManagerApp < Tui::App
   private def switch_panel : Nil
     if @active_panel == :left
       @active_panel = :right
-      @left_panel.focused = false
-      @right_panel.focused = true
+      @left_panel.blur
+      @right_panel.focus
     else
       @active_panel = :left
-      @left_panel.focused = true
-      @right_panel.focused = false
+      @left_panel.focus
+      @right_panel.blur
     end
   end
 
