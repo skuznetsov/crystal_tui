@@ -74,6 +74,18 @@ class ButtonApp < Tui::App
   def handle_event(event : Tui::Event) : Bool
     if event.is_a?(Tui::KeyEvent)
       case
+      when event.matches?("+"), event.matches?("=")  # + (and = without shift)
+        increment
+        event.stop!
+        return true
+      when event.matches?("-")
+        decrement
+        event.stop!
+        return true
+      when event.matches?("0")
+        reset
+        event.stop!
+        return true
       when event.matches?("tab")
         focus_next
         event.stop!
