@@ -11,18 +11,25 @@ module Tui
     end
 
     BORDERS = {
-      BorderStyle::Light  => {h: '─', v: '│', tl: '┌', tr: '┐', bl: '└', br: '┘'},
-      BorderStyle::Heavy  => {h: '━', v: '┃', tl: '┏', tr: '┓', bl: '┗', br: '┛'},
-      BorderStyle::Double => {h: '═', v: '║', tl: '╔', tr: '╗', bl: '╚', br: '╝'},
-      BorderStyle::Round  => {h: '─', v: '│', tl: '╭', tr: '╮', bl: '╰', br: '╯'},
-      BorderStyle::Ascii  => {h: '-', v: '|', tl: '+', tr: '+', bl: '+', br: '+'},
+      BorderStyle::Light  => {h: '─', v: '│', tl: '┌', tr: '┐', bl: '└', br: '┘', tl_title: '┤', tr_title: '├'},
+      BorderStyle::Heavy  => {h: '━', v: '┃', tl: '┏', tr: '┓', bl: '┗', br: '┛', tl_title: '┫', tr_title: '┣'},
+      BorderStyle::Double => {h: '═', v: '║', tl: '╔', tr: '╗', bl: '╚', br: '╝', tl_title: '╡', tr_title: '╞'},
+      BorderStyle::Round  => {h: '─', v: '│', tl: '╭', tr: '╮', bl: '╰', br: '╯', tl_title: '┤', tr_title: '├'},
+      BorderStyle::Ascii  => {h: '-', v: '|', tl: '+', tr: '+', bl: '+', br: '+', tl_title: '|', tr_title: '|'},
     }
+
+    enum TitleStyle
+      None      # No decorations
+      Brackets  # ┤ Title ├
+      Spaces    # Just spaces around title
+    end
 
     property title : String = ""
     property border_style : BorderStyle = BorderStyle::Light
     property border_color : Color = Color.white
     property title_color : Color = Color.yellow
     property title_align : Label::Align = Label::Align::Left
+    property title_decor : TitleStyle = TitleStyle::Brackets  # Default to brackets
     property padding : Int32 = 0
 
     # Content widget (single child)
@@ -79,25 +86,39 @@ module Tui
       title_end = 0
 
       if !@title.empty?
-        available = @rect.width - 4  # 2 corners + 2 padding
+        # Calculate decoration overhead
+        decor_left, decor_right = case @title_decor
+                                  when .brackets? then {" #{border[:tl_title]} ", " #{border[:tr_title]} "}
+                                  when .spaces?   then {" ", " "}
+                                  else                 {"", ""}
+                                  end
+
+        available = @rect.width - 4  # 2 corners + minimum padding
         display_title = @title.size > available ? @title[0, available - 1] + "…" : @title
+        full_title = "#{decor_left}#{display_title}#{decor_right}"
 
         title_start = case @title_align
-                      when .left?   then 2
-                      when .center? then (@rect.width - display_title.size) // 2
-                      when .right?  then @rect.width - display_title.size - 2
-                      else               2
+                      when .left?   then 1
+                      when .center? then (@rect.width - full_title.size) // 2
+                      when .right?  then @rect.width - full_title.size - 1
+                      else               1
                       end
-        title_end = title_start + display_title.size
+        title_end = title_start + full_title.size
 
-        # Draw title
-        display_title.each_char_with_index do |char, i|
+        # Draw full title with decorations
+        full_title.each_char_with_index do |char, i|
           x = @rect.x + title_start + i
-          draw_if_visible(buffer, clip, x, @rect.y, char, title_style)
+          # Use border color for brackets, title color for text
+          char_style = if @title_decor.brackets? && (i < decor_left.size || i >= decor_left.size + display_title.size)
+                         style  # Border style for brackets
+                       else
+                         title_style
+                       end
+          draw_if_visible(buffer, clip, x, @rect.y, char, char_style)
         end
       end
 
-      # Draw top horizontal line (avoiding title)
+      # Draw top horizontal line (avoiding title area)
       (1...(@rect.width - 1)).each do |i|
         next if i >= title_start && i < title_end
         draw_if_visible(buffer, clip, @rect.x + i, @rect.y, border[:h], style)
