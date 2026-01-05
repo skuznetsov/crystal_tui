@@ -18,6 +18,7 @@ module Tui
     property? focused : Bool = false
     property? visible : Bool = true
     property? mounted : Bool = false
+    property? focusable : Bool = false  # Can receive focus
 
     # Dirty flag for re-rendering
     @dirty : Bool = true
@@ -211,8 +212,14 @@ module Tui
     # --- Focus ---
 
     def focus : Nil
+      return unless @focusable
       @focused = true
       mark_dirty!
+    end
+
+    # Alias for focus (bang version)
+    def focus! : Nil
+      focus
     end
 
     def blur : Nil

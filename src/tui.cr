@@ -38,6 +38,7 @@ require "./tui/containers/hbox"
 
 # Basic Widgets
 require "./tui/widgets/label"
+require "./tui/widgets/button"
 
 # Application
 require "./tui/app"
