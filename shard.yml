@@ -1,0 +1,25 @@
+name: crystal_tui
+version: 0.1.0
+
+description: |
+  Modern TUI framework for Crystal.
+  Inspired by Textual (Python) and TurboVision (Borland).
+  Features: reactive state, TCSS styling, overlay transparency.
+
+authors:
+  - Sergey Kuznetsov <github@rigelstar.com>
+
+license: MIT
+
+crystal: ">= 1.10.0"
+
+targets:
+  hello:
+    main: examples/hello.cr
+  file_manager:
+    main: examples/file_manager.cr
+
+development_dependencies:
+  ameba:
+    github: crystal-ameba/ameba
+    version: ~> 1.6
