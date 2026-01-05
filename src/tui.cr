@@ -40,6 +40,7 @@ require "./tui/containers/hbox"
 require "./tui/widgets/label"
 require "./tui/widgets/button"
 require "./tui/widgets/input"
+require "./tui/widgets/data_table"
 
 # Application
 require "./tui/app"
