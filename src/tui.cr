@@ -41,6 +41,7 @@ require "./tui/widgets/label"
 require "./tui/widgets/button"
 require "./tui/widgets/input"
 require "./tui/widgets/data_table"
+require "./tui/widgets/panel"
 
 # Application
 require "./tui/app"
