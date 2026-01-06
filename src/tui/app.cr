@@ -171,21 +171,39 @@ module Tui
     def handle_event(event : Event) : Bool
       return false if event.stopped?
 
-      # Handle quit keys at app level
+      # Handle app-level keys
       if event.is_a?(KeyEvent)
         if event.matches?("ctrl+c") || event.matches?("ctrl+q")
           quit
           return true
         end
 
-        # Also handle 'q' for quit in simple apps
+        # Tab focus navigation
+        if event.matches?("tab")
+          focus_next
+          return true
+        end
+
+        if event.matches?("shift+tab")
+          focus_prev
+          return true
+        end
+
+        # Route key events to focused widget first
+        if focused = Widget.focused_widget
+          if focused.handle_event(event)
+            return true
+          end
+        end
+
+        # 'q' for quit only if not handled by focused widget
         if event.matches?("q")
           quit
           return true
         end
       end
 
-      # Delegate to children
+      # Delegate to children (for mouse events, etc.)
       super
     end
 

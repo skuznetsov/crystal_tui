@@ -70,6 +70,61 @@ module Tui
       self.focused = false
     end
 
+    # Alias for focus (bang version for Button etc.)
+    def focus! : Nil
+      focus
+    end
+
+    # Collect all focusable widgets in tree order (depth-first)
+    def collect_focusable : Array(Widget)
+      result = [] of Widget
+      collect_focusable_recursive(result)
+      result
+    end
+
+    protected def collect_focusable_recursive(result : Array(Widget)) : Nil
+      result << self if @focusable && @visible
+      @children.each { |child| child.collect_focusable_recursive(result) }
+    end
+
+    # Focus next focusable widget (Tab behavior)
+    def focus_next : Widget?
+      focusable = root_widget.collect_focusable
+      return nil if focusable.empty?
+
+      if focused_widget = Widget.focused_widget
+        idx = focusable.index(focused_widget)
+        if idx
+          next_idx = (idx + 1) % focusable.size
+          focusable[next_idx].focus
+          return focusable[next_idx]
+        end
+      end
+
+      # No current focus, focus first
+      focusable.first.focus
+      focusable.first
+    end
+
+    # Focus previous focusable widget (Shift+Tab behavior)
+    def focus_prev : Widget?
+      focusable = root_widget.collect_focusable
+      return nil if focusable.empty?
+
+      if focused_widget = Widget.focused_widget
+        idx = focusable.index(focused_widget)
+        if idx
+          prev_idx = (idx - 1) % focusable.size
+          focusable[prev_idx].focus
+          return focusable[prev_idx]
+        end
+      end
+
+      # No current focus, focus last
+      focusable.last.focus
+      focusable.last
+    end
+
     # --- Hierarchy ---
 
     def children : Array(Widget)
@@ -279,27 +334,9 @@ module Tui
       end
     end
 
-    # --- Focus ---
-
-    def focus : Nil
-      return unless @focusable
-      @focused = true
-      mark_dirty!
-    end
-
-    # Alias for focus (bang version)
-    def focus! : Nil
-      focus
-    end
-
-    def blur : Nil
-      @focused = false
-      mark_dirty!
-    end
-
-    # Find root widget
-    def root : Widget
-      @parent.try(&.root) || self
+    # Find root widget (named root_widget to avoid conflict with WindowManager.root)
+    def root_widget : Widget
+      @parent.try(&.root_widget) || self
     end
 
     # Find app (if attached)
