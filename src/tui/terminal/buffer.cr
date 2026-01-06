@@ -70,34 +70,35 @@ module Tui
       end
     end
 
-    # Draw a box
-    def draw_box(x : Int32, y : Int32, w : Int32, h : Int32, style : Style = Style.default, border_style : Symbol = :light) : Nil
-      chars = case border_style
-              when :light
-                {tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│'}
-              when :heavy
-                {tl: '┏', tr: '┓', bl: '┗', br: '┛', h: '━', v: '┃'}
-              when :double
-                {tl: '╔', tr: '╗', bl: '╚', br: '╝', h: '═', v: '║'}
-              when :round
-                {tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '─', v: '│'}
-              else
-                {tl: '┌', tr: '┐', bl: '└', br: '┘', h: '─', v: '│'}
-              end
+    # Draw a box using BorderStyle enum
+    def draw_box(x : Int32, y : Int32, w : Int32, h : Int32, style : Style = Style.default, border_style : BorderStyle = BorderStyle::Light) : Nil
+      chars = Tui.border_chars(border_style)
 
       # Corners
-      set(x, y, chars[:tl], style)
-      set(x + w - 1, y, chars[:tr], style)
-      set(x, y + h - 1, chars[:bl], style)
-      set(x + w - 1, y + h - 1, chars[:br], style)
+      set(x, y, chars.tl, style)
+      set(x + w - 1, y, chars.tr, style)
+      set(x, y + h - 1, chars.bl, style)
+      set(x + w - 1, y + h - 1, chars.br, style)
 
       # Horizontal lines
-      draw_hline(x + 1, y, w - 2, chars[:h], style)
-      draw_hline(x + 1, y + h - 1, w - 2, chars[:h], style)
+      draw_hline(x + 1, y, w - 2, chars.h, style)
+      draw_hline(x + 1, y + h - 1, w - 2, chars.h, style)
 
       # Vertical lines
-      draw_vline(x, y + 1, h - 2, chars[:v], style)
-      draw_vline(x + w - 1, y + 1, h - 2, chars[:v], style)
+      draw_vline(x, y + 1, h - 2, chars.v, style)
+      draw_vline(x + w - 1, y + 1, h - 2, chars.v, style)
+    end
+
+    # Legacy overload accepting Symbol for backwards compatibility
+    def draw_box(x : Int32, y : Int32, w : Int32, h : Int32, style : Style, border_style : Symbol) : Nil
+      bs = case border_style
+           when :heavy  then BorderStyle::Heavy
+           when :double then BorderStyle::Double
+           when :round  then BorderStyle::Round
+           when :ascii  then BorderStyle::Ascii
+           else              BorderStyle::Light
+           end
+      draw_box(x, y, w, h, style, bs)
     end
 
     # Fill a rectangle

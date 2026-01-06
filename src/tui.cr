@@ -11,6 +11,7 @@
 # - Compile-time type safety
 
 # Core
+require "./tui/borders"
 require "./tui/terminal/ansi"
 require "./tui/terminal/cell"
 require "./tui/terminal/buffer"
