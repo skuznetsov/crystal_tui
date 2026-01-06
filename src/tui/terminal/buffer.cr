@@ -1,16 +1,17 @@
-# Double-buffered screen buffer
+# Double-buffered screen buffer (optimized flat array)
 module Tui
   class Buffer
     getter width : Int32
     getter height : Int32
 
-    @cells : Array(Array(Cell))
-    @prev_cells : Array(Array(Cell))
+    @cells : Array(Cell)
+    @prev_cells : Array(Cell)
     @dirty : Set(Tuple(Int32, Int32))
 
     def initialize(@width : Int32, @height : Int32)
-      @cells = Array.new(@height) { Array.new(@width) { Cell.empty } }
-      @prev_cells = Array.new(@height) { Array.new(@width) { Cell.new('\0') } }  # Force initial draw
+      size = @width * @height
+      @cells = Array.new(size) { Cell.empty }
+      @prev_cells = Array.new(size) { Cell.new('\0') }  # Force initial draw
       @dirty = Set(Tuple(Int32, Int32)).new
     end
 
@@ -18,8 +19,9 @@ module Tui
     def set(x : Int32, y : Int32, cell : Cell) : Nil
       return unless in_bounds?(x, y)
 
-      if @cells[y][x] != cell
-        @cells[y][x] = cell
+      idx = index(x, y)
+      if @cells[idx] != cell
+        @cells[idx] = cell
         @dirty.add({x, y})
       end
     end
@@ -32,7 +34,7 @@ module Tui
     # Get a cell at position
     def get(x : Int32, y : Int32) : Cell
       return Cell.empty unless in_bounds?(x, y)
-      @cells[y][x]
+      @cells[index(x, y)]
     end
 
     # Check if position is within bounds
@@ -114,8 +116,9 @@ module Tui
     def resize(new_width : Int32, new_height : Int32) : Nil
       return if new_width == @width && new_height == @height
 
-      new_cells = Array.new(new_height) { Array.new(new_width) { Cell.empty } }
-      new_prev = Array.new(new_height) { Array.new(new_width) { Cell.new('\0') } }
+      new_size = new_width * new_height
+      new_cells = Array.new(new_size) { Cell.empty }
+      new_prev = Array.new(new_size) { Cell.new('\0') }
 
       # Copy existing content
       copy_height = Math.min(@height, new_height)
@@ -123,7 +126,9 @@ module Tui
 
       copy_height.times do |y|
         copy_width.times do |x|
-          new_cells[y][x] = @cells[y][x]
+          old_idx = y * @width + x
+          new_idx = y * new_width + x
+          new_cells[new_idx] = @cells[old_idx]
         end
       end
 
@@ -155,10 +160,11 @@ module Tui
 
         sorted.each do |pos|
           x, y = pos
-          cell = @cells[y][x]
+          idx = y * @width + x
+          cell = @cells[idx]
 
           # Skip if unchanged from previous frame
-          next if @prev_cells[y][x] == cell
+          next if @prev_cells[idx] == cell
 
           # Move cursor if not sequential
           if y != last_y || x != last_x + 1
@@ -177,7 +183,7 @@ module Tui
           last_y = y
 
           # Update previous buffer
-          @prev_cells[y][x] = cell
+          @prev_cells[idx] = cell
         end
 
         s << ANSI.reset
@@ -192,8 +198,9 @@ module Tui
     def invalidate : Nil
       @height.times do |y|
         @width.times do |x|
+          idx = index(x, y)
           @dirty.add({x, y})
-          @prev_cells[y][x] = Cell.new('\0')
+          @prev_cells[idx] = Cell.new('\0')
         end
       end
     end
@@ -202,10 +209,16 @@ module Tui
     def to_s(io : IO) : Nil
       @height.times do |y|
         @width.times do |x|
-          io << @cells[y][x].char
+          io << @cells[index(x, y)].char
         end
         io << '\n' if y < @height - 1
       end
+    end
+
+    # Calculate flat array index from x,y coordinates
+    @[AlwaysInline]
+    private def index(x : Int32, y : Int32) : Int32
+      y * @width + x
     end
   end
 end
