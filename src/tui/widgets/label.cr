@@ -59,28 +59,42 @@ module Tui
       lines.each_with_index do |line, line_idx|
         break if line_idx >= @rect.height
 
-        # Truncate line to fit width
-        display_line = line.size > @rect.width ? line[0, @rect.width] : line
+        # Truncate line to fit width (using display width)
+        display_line = Unicode.display_width(line) > @rect.width ? Unicode.truncate(line, @rect.width, "") : line
+        line_width = Unicode.display_width(display_line)
 
         # Calculate x position based on alignment
         text_x = case @align
                  when .left?
                    @rect.x
                  when .center?
-                   @rect.x + (@rect.width - display_line.size) // 2
+                   @rect.x + (@rect.width - line_width) // 2
                  when .right?
-                   @rect.x + @rect.width - display_line.size
+                   @rect.x + @rect.width - line_width
                  else
                    @rect.x
                  end
 
         text_y = @rect.y + line_idx
 
-        # Draw line
-        display_line.each_char_with_index do |char, i|
-          x = text_x + i
-          next unless clip.contains?(x, text_y)
-          buffer.set(x, text_y, char, @style)
+        # Draw line (tracking display position for wide chars)
+        display_pos = 0
+        display_line.each_char do |char|
+          char_width = Unicode.char_width(char)
+          next if char_width == 0  # Skip combining characters
+
+          x = text_x + display_pos
+          break if x >= @rect.x + @rect.width  # Stop if we'd overflow
+
+          if clip.contains?(x, text_y)
+            buffer.set(x, text_y, char, @style)
+            # Wide characters: fill second cell with space to prevent artifacts
+            if char_width == 2 && clip.contains?(x + 1, text_y)
+              buffer.set(x + 1, text_y, ' ', @style)
+            end
+          end
+
+          display_pos += char_width
         end
       end
     end

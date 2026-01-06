@@ -31,6 +31,9 @@ require "./tui/layout/flex"
 # CSS
 require "./tui/css/parser"
 
+# Unicode
+require "./tui/unicode"
+
 # Widgets
 require "./tui/reactive"
 require "./tui/widget"
