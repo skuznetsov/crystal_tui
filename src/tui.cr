@@ -38,6 +38,7 @@ require "./tui/widget"
 # Containers
 require "./tui/containers/vbox"
 require "./tui/containers/hbox"
+require "./tui/containers/split_container"
 
 # Basic Widgets
 require "./tui/widgets/label"
@@ -48,6 +49,18 @@ require "./tui/widgets/panel"
 require "./tui/widgets/file_panel"
 require "./tui/widgets/footer"
 require "./tui/widgets/text_viewer"
+require "./tui/widgets/dialog"
+require "./tui/widgets/menu_bar"
+require "./tui/widgets/tabbed_panel"
+require "./tui/widgets/collapsible"
+require "./tui/widgets/rich_text"
+require "./tui/widgets/window_manager"
+require "./tui/widgets/text_editor"
+require "./tui/widgets/progress_bar"
+require "./tui/widgets/checkbox"
+require "./tui/widgets/radio_group"
+require "./tui/widgets/combo_box"
+require "./tui/widgets/draggable_window"
 
 # Application
 require "./tui/app"

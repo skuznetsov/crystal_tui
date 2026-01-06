@@ -15,15 +15,59 @@ module Tui
     property rect : Rect = Rect.zero
 
     # State
-    property? focused : Bool = false
     property? visible : Bool = true
     property? mounted : Bool = false
     property? focusable : Bool = false  # Can receive focus
+    @focused : Bool = false
+
+    # Z-order (higher = on top)
+    property z_index : Int32 = 0
+
+    # Global focus tracking
+    class_property focused_widget : Widget? = nil
 
     # Dirty flag for re-rendering
     @dirty : Bool = true
 
     def initialize(@id : String? = nil)
+    end
+
+    # Focus management
+    def focused? : Bool
+      @focused
+    end
+
+    def focused=(value : Bool) : Nil
+      if value
+        # Clear previous focus
+        if old = Widget.focused_widget
+          if old != self
+            old.clear_focus_internal
+          end
+        end
+        Widget.focused_widget = self
+        @focused = true
+        mark_dirty!
+      else
+        @focused = false
+        Widget.focused_widget = nil if Widget.focused_widget == self
+        mark_dirty!
+      end
+    end
+
+    # Internal method to clear focus without triggering global update
+    protected def clear_focus_internal : Nil
+      @focused = false
+      mark_dirty!
+    end
+
+    # Request focus (convenience method)
+    def focus : Nil
+      self.focused = true
+    end
+
+    def blur : Nil
+      self.focused = false
     end
 
     # --- Hierarchy ---
@@ -75,10 +119,16 @@ module Tui
 
     # --- Rendering ---
 
+    # Returns the rect needed for rendering (may be larger than layout rect)
+    # Override for widgets like dropdowns that render outside their bounds
+    def render_rect : Rect
+      @rect
+    end
+
     # Override to render widget content
     def render(buffer : Buffer, clip : Rect) : Nil
-      # Default: render children
-      @children.each do |child|
+      # Default: render children sorted by z_index (lower first, higher on top)
+      @children.sort_by(&.z_index).each do |child|
         next unless child.visible?
         if child_clip = clip.intersect(child.rect)
           child.render(buffer, child_clip)
@@ -105,17 +155,37 @@ module Tui
 
     # --- Events ---
 
+    # Mouse capture - widget that captures gets all mouse events
+    class_property mouse_capture : Widget? = nil
+
+    # Capture all mouse events (for dragging)
+    def capture_mouse : Nil
+      Widget.mouse_capture = self
+    end
+
+    # Release mouse capture
+    def release_mouse : Nil
+      Widget.mouse_capture = nil if Widget.mouse_capture == self
+    end
+
     # Handle an event, return true if handled
     def handle_event(event : Event) : Bool
       return false if event.stopped?
+
+      # If a widget has captured mouse, send mouse events directly to it
+      if event.is_a?(MouseEvent)
+        if captured = Widget.mouse_capture
+          return captured.handle_event(event) if captured != self
+        end
+      end
 
       # Try children first (in reverse z-order)
       @children.reverse_each do |child|
         next unless child.visible?
 
-        # For mouse events, check if in bounds
+        # For mouse events, check if in bounds (unless it's the capturing widget)
         if event.is_a?(MouseEvent)
-          next unless event.in_rect?(child.rect)
+          next unless event.in_rect?(child.render_rect) || child == Widget.mouse_capture
         end
 
         if child.handle_event(event)

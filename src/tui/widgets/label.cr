@@ -52,25 +52,36 @@ module Tui
         buffer.set(x, y, ' ', @style)
       end
 
-      # Calculate text position based on alignment
-      display_text = @text[0, @rect.width]?  || @text
-      text_x = case @align
-               when .left?
-                 @rect.x
-               when .center?
-                 @rect.x + (@rect.width - display_text.size) // 2
-               when .right?
-                 @rect.x + @rect.width - display_text.size
-               else
-                 @rect.x
-               end
+      # Split text into lines
+      lines = @text.split('\n')
 
-      # Draw text
-      text_y = @rect.y + @rect.height // 2  # Vertically centered
-      display_text.each_char_with_index do |char, i|
-        x = text_x + i
-        next unless clip.contains?(x, text_y)
-        buffer.set(x, text_y, char, @style)
+      # Draw each line
+      lines.each_with_index do |line, line_idx|
+        break if line_idx >= @rect.height
+
+        # Truncate line to fit width
+        display_line = line.size > @rect.width ? line[0, @rect.width] : line
+
+        # Calculate x position based on alignment
+        text_x = case @align
+                 when .left?
+                   @rect.x
+                 when .center?
+                   @rect.x + (@rect.width - display_line.size) // 2
+                 when .right?
+                   @rect.x + @rect.width - display_line.size
+                 else
+                   @rect.x
+                 end
+
+        text_y = @rect.y + line_idx
+
+        # Draw line
+        display_line.each_char_with_index do |char, i|
+          x = text_x + i
+          next unless clip.contains?(x, text_y)
+          buffer.set(x, text_y, char, @style)
+        end
       end
     end
 

@@ -149,11 +149,12 @@ module Tui
     private def render_all : Nil
       @buffer.clear
 
-      # Render all visible children
+      # Render all visible children sorted by z_index (lower first, higher on top)
       clip = @rect
-      @children.each do |child|
+      @children.sort_by(&.z_index).each do |child|
         next unless child.visible?
-        if child_clip = clip.intersect(child.rect)
+        # Use render_rect for clipping (may be larger than layout rect for dropdowns, etc.)
+        if child_clip = clip.intersect(child.render_rect)
           child.render(@buffer, child_clip)
         end
       end
