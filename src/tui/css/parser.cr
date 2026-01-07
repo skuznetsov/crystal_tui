@@ -149,6 +149,10 @@ module Tui::CSS
           child_index(widget).try { |i| i.even? } || false
         when "odd"
           child_index(widget).try { |i| i.odd? } || false
+        when "dark"
+          Tui.theme.dark?
+        when "light"
+          Tui.theme.light?
         else
           # Handle :nth-child(n)
           if @pseudo.starts_with?("nth-child(") && @pseudo.ends_with?(")")

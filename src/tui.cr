@@ -44,6 +44,7 @@ require "./tui/widget"
 require "./tui/containers/vbox"
 require "./tui/containers/hbox"
 require "./tui/containers/split_container"
+require "./tui/containers/grid"
 
 # Basic Widgets
 require "./tui/widgets/label"
@@ -76,6 +77,8 @@ require "./tui/widgets/rule"
 require "./tui/widgets/list_view"
 require "./tui/widgets/log"
 require "./tui/widgets/sparkline"
+require "./tui/widgets/selection_list"
+require "./tui/widgets/link"
 
 # Markdown
 require "./tui/markdown/parser"

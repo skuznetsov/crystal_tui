@@ -50,6 +50,7 @@ HelloWorld.new.run
 ### Containers
 - `Panel` - Container with border and title
 - `HBox` / `VBox` - Horizontal/vertical layout
+- `Grid` - CSS grid-style layout
 - `SplitContainer` - Resizable split panes
 - `TabbedPanel` - Tabbed content
 - `Collapsible` - Expandable section
@@ -78,10 +79,12 @@ HelloWorld.new.run
 - `DataTable` - Data grid with sorting
 - `Tree` - Hierarchical tree view
 - `ListView` - Virtual scrolling list
+- `SelectionList` - Multi-select list with checkboxes
 - `Log` - Scrolling log viewer with levels
 - `FilePanel` - File browser
 - `TextViewer` - Scrollable text
 - `MarkdownView` - Markdown renderer
+- `Link` - Clickable URL/text
 
 ### Layout
 - `IconSidebar` - VSCode-style sidebar

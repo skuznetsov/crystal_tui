@@ -32,22 +32,20 @@
 - [x] `:even`, `:odd` - even/odd children
 - [x] `:enabled`, `:disabled` - form states
 
+### Recently Added (Phase 2) ✓
+- [x] Theme pseudo-classes: `:dark`, `:light`
+- [x] Text properties: `text-align`, `text-style`, `color`
+- [x] Grid layout: `Grid` container with `grid-columns`, `grid-rows`, `grid-gutter`, `column-span`, `row-span`
+
 ### Missing (Priority: MEDIUM)
-- [ ] Theme pseudo-classes: `:dark`, `:light`
 - [ ] Dock property: `dock` (top, bottom, left, right)
 - [ ] Offset: `offset`, `offset-x`, `offset-y`
-- [ ] Grid layout:
-  - [ ] `layout: grid`
-  - [ ] `grid-columns`, `grid-rows`, `grid-gutter`
-  - [ ] `column-span`, `row-span`
 - [ ] Visual properties:
   - [ ] `opacity`, `text-opacity`
   - [ ] `tint`, `background-tint`
   - [ ] `visibility` (visible, hidden)
   - [ ] `display` (block, none)
 - [ ] Text properties:
-  - [ ] `text-align` (left, center, right)
-  - [ ] `text-style` (bold, italic, underline, strike)
   - [ ] `text-wrap` (wrap, nowrap)
   - [ ] `text-overflow` (ellipsis, clip)
 - [ ] Border properties:
@@ -64,7 +62,7 @@
 
 ## 2. Widgets
 
-### Current Widgets (21)
+### Current Widgets (33)
 - [x] Panel - container with border/title
 - [x] Button - clickable button
 - [x] Label - text display
@@ -99,9 +97,9 @@
 
 #### Priority 2 - Common ✓
 - [x] **ListView** - Virtual scrolling list
-- [ ] **SelectionList** - Multi-select list
+- [x] **SelectionList** - Multi-select list
 - [x] **Log/RichLog** - Scrolling log viewer
-- [ ] **Link** - Clickable URL
+- [x] **Link** - Clickable URL
 - [x] **Sparkline** - Mini chart
 
 #### Priority 3 - Nice to Have

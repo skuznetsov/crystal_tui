@@ -1,11 +1,18 @@
 # Main application class
 module Tui
+  # Theme mode for styling
+  enum Theme
+    Light
+    Dark
+  end
+
   # Overlay callback for rendering popups/menus on top of everything
   alias OverlayRenderer = Proc(Buffer, Rect, Nil)
 
   # Module-level overlay storage (shared across all App subclasses)
   class_getter overlays : Array(OverlayRenderer) = [] of OverlayRenderer
   class_property current_app : App? = nil
+  class_property theme : Theme = Theme::Dark
 
   abstract class App < Widget
     @buffer : Buffer
