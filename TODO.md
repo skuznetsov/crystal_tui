@@ -196,10 +196,10 @@ docs/
 ## 5. Developer Experience
 
 ### Tooling
-- [ ] `crystal_tui` CLI tool:
-  - [ ] `tui new myapp` - scaffold new app
-  - [ ] `tui dev` - run with hot reload
-  - [ ] `tui build` - production build
+- [x] `tui` CLI tool:
+  - [x] `tui new myapp` - scaffold new app
+  - [x] `tui dev` - run with hot reload
+  - [x] `tui build` - production build
 - [ ] VS Code extension (syntax highlighting for .tcss)
 - [ ] Widget inspector (devtools)
 
