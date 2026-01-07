@@ -65,6 +65,7 @@ require "./tui/widgets/checkbox"
 require "./tui/widgets/radio_group"
 require "./tui/widgets/combo_box"
 require "./tui/widgets/draggable_window"
+require "./tui/widgets/icon_sidebar"
 
 # Markdown
 require "./tui/markdown/parser"
