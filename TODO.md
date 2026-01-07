@@ -43,12 +43,11 @@
 
 ### Recently Added (Phase 4) ✓
 - [x] Offset: `offset`, `offset-x`, `offset-y`
-- [x] Opacity: `opacity`
+- [x] Opacity: `opacity`, `text-opacity`
 - [x] Text wrap: `text-wrap` (wrap, nowrap)
 
 ### Missing (Priority: LOW)
 - [ ] Remaining visual properties:
-  - [ ] `text-opacity`
   - [ ] `tint`, `background-tint`
 - [ ] Border properties:
   - [ ] `border-title-color`, `border-title-style`

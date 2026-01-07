@@ -24,6 +24,7 @@ module Tui
     property align : Align = Align::Left
     property text_overflow : TextOverflow = TextOverflow::Ellipsis
     property text_wrap : TextWrap = TextWrap::NoWrap
+    property text_opacity : Float64 = 1.0
 
     def initialize(
       @text : String = "",
@@ -207,6 +208,13 @@ module Tui
                        when "nowrap" then TextWrap::NoWrap
                        else               TextWrap::NoWrap
                        end
+        when "text-opacity"
+          str = value.to_s.strip
+          @text_opacity = if str.ends_with?("%")
+                            (str.rchop("%").to_f? || 100.0) / 100.0
+                          else
+                            str.to_f? || 1.0
+                          end.clamp(0.0, 1.0)
         end
       end
     end
