@@ -61,6 +61,10 @@ module Tui
 
     property dock : Dock = Dock::None
 
+    # Offset (shifts widget from calculated position)
+    property offset_x : Int32 = 0
+    property offset_y : Int32 = 0
+
     # State
     property? visible : Bool = true
     property? mounted : Bool = false
@@ -70,6 +74,9 @@ module Tui
 
     # Z-order (higher = on top)
     property z_index : Int32 = 0
+
+    # Opacity (0.0 = transparent, 1.0 = opaque)
+    property opacity : Float64 = 1.0
 
     # Global focus and hover tracking
     class_property focused_widget : Widget? = nil
@@ -448,6 +455,23 @@ module Tui
                   when "right"  then Dock::Right
                   else               Dock::None
                   end
+        when "offset"
+          # Single value applies to both
+          if val = value.to_s.to_i?
+            @offset_x = val
+            @offset_y = val
+          end
+        when "offset-x"
+          @offset_x = value.to_s.to_i? || 0
+        when "offset-y"
+          @offset_y = value.to_s.to_i? || 0
+        when "opacity"
+          str = value.to_s.strip
+          @opacity = if str.ends_with?("%")
+                       (str.rchop("%").to_f? || 100.0) / 100.0
+                     else
+                       str.to_f? || 1.0
+                     end.clamp(0.0, 1.0)
 
         # Layout dimensions
         when "width"

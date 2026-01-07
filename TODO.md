@@ -41,13 +41,15 @@
 - [x] Dock property: `dock` (top, bottom, left, right)
 - [x] Text overflow: `text-overflow` (ellipsis, clip)
 
+### Recently Added (Phase 4) ✓
+- [x] Offset: `offset`, `offset-x`, `offset-y`
+- [x] Opacity: `opacity`
+- [x] Text wrap: `text-wrap` (wrap, nowrap)
+
 ### Missing (Priority: LOW)
-- [ ] Offset: `offset`, `offset-x`, `offset-y`
 - [ ] Remaining visual properties:
-  - [ ] `opacity`, `text-opacity`
+  - [ ] `text-opacity`
   - [ ] `tint`, `background-tint`
-- [ ] Text properties:
-  - [ ] `text-wrap` (wrap, nowrap)
 - [ ] Border properties:
   - [ ] `border-title-color`, `border-title-style`
   - [ ] `border-subtitle-*`

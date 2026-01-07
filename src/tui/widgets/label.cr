@@ -14,10 +14,16 @@ module Tui
       Ellipsis  # Add ... at end
     end
 
+    enum TextWrap
+      Wrap    # Wrap text to next line
+      NoWrap  # Don't wrap, truncate instead
+    end
+
     reactive text : String = ""
     property style : Style = Style.default
     property align : Align = Align::Left
     property text_overflow : TextOverflow = TextOverflow::Ellipsis
+    property text_wrap : TextWrap = TextWrap::NoWrap
 
     def initialize(
       @text : String = "",
@@ -58,21 +64,14 @@ module Tui
         buffer.set(x, y, ' ', @style)
       end
 
-      # Split text into lines
-      lines = @text.split('\n')
+      # Get display lines (with wrapping if enabled)
+      display_lines = get_display_lines
 
       # Draw each line
-      lines.each_with_index do |line, line_idx|
+      display_lines.each_with_index do |line, line_idx|
         break if line_idx >= @rect.height
 
-        # Truncate line to fit width (using display width)
-        ellipsis = @text_overflow.ellipsis? ? "…" : ""
-        display_line = if Unicode.display_width(line) > @rect.width
-                         Unicode.truncate(line, @rect.width, ellipsis)
-                       else
-                         line
-                       end
-        line_width = Unicode.display_width(display_line)
+        line_width = Unicode.display_width(line)
 
         # Calculate x position based on alignment
         text_x = case @align
@@ -90,7 +89,7 @@ module Tui
 
         # Draw line (tracking display position for wide chars)
         display_pos = 0
-        display_line.each_char do |char|
+        line.each_char do |char|
           char_width = Unicode.char_width(char)
           next if char_width == 0  # Skip combining characters
 
@@ -108,6 +107,64 @@ module Tui
           display_pos += char_width
         end
       end
+    end
+
+    private def get_display_lines : Array(String)
+      result = [] of String
+      ellipsis = @text_overflow.ellipsis? ? "…" : ""
+
+      @text.split('\n').each do |line|
+        if @text_wrap.wrap? && Unicode.display_width(line) > @rect.width
+          # Wrap long lines
+          result.concat(wrap_line(line))
+        elsif Unicode.display_width(line) > @rect.width
+          # Truncate
+          result << Unicode.truncate(line, @rect.width, ellipsis)
+        else
+          result << line
+        end
+      end
+
+      result
+    end
+
+    private def wrap_line(line : String) : Array(String)
+      result = [] of String
+      return result if @rect.width <= 0
+
+      current_line = ""
+      current_width = 0
+
+      line.split(/(\s+)/).each do |segment|
+        segment_width = Unicode.display_width(segment)
+
+        if current_width + segment_width <= @rect.width
+          current_line += segment
+          current_width += segment_width
+        elsif segment_width > @rect.width
+          # Word is longer than line - force break
+          result << current_line unless current_line.empty?
+          # Break the long word
+          segment.each_char do |char|
+            char_width = Unicode.char_width(char)
+            if current_width + char_width > @rect.width
+              result << current_line
+              current_line = ""
+              current_width = 0
+            end
+            current_line += char
+            current_width += char_width
+          end
+        else
+          # Start new line
+          result << current_line unless current_line.empty?
+          current_line = segment.lstrip
+          current_width = Unicode.display_width(current_line)
+        end
+      end
+
+      result << current_line unless current_line.empty?
+      result
     end
 
     def watch_text(value : String)
@@ -144,6 +201,12 @@ module Tui
                            when "ellipsis" then TextOverflow::Ellipsis
                            else                 TextOverflow::Ellipsis
                            end
+        when "text-wrap"
+          @text_wrap = case value.to_s.downcase
+                       when "wrap"   then TextWrap::Wrap
+                       when "nowrap" then TextWrap::NoWrap
+                       else               TextWrap::NoWrap
+                       end
         end
       end
     end

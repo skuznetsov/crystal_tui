@@ -197,5 +197,35 @@ describe Tui::Label do
 
       label.render(buffer, label.rect)  # should not crash
     end
+
+    it "wraps long text when text_wrap is Wrap" do
+      buffer = Tui::Buffer.new(20, 5)
+      label = Tui::Label.new("Hello World Test")
+      label.text_wrap = Tui::Label::TextWrap::Wrap
+      label.rect = Tui::Rect.new(0, 0, 8, 5)
+
+      label.render(buffer, label.rect)
+
+      # "Hello World Test" with width 8 should wrap:
+      # Line 1: "Hello " (6 chars)
+      # Line 2: "World " (6 chars)
+      # Line 3: "Test" (4 chars)
+      buffer.get(0, 0).char.should eq 'H'
+      buffer.get(0, 1).char.should eq 'W'
+      buffer.get(0, 2).char.should eq 'T'
+    end
+
+    it "does not wrap when text_wrap is NoWrap (default)" do
+      buffer = Tui::Buffer.new(20, 5)
+      label = Tui::Label.new("Hello World")
+      label.rect = Tui::Rect.new(0, 0, 8, 5)
+
+      label.render(buffer, label.rect)
+
+      # Should truncate with ellipsis, not wrap
+      buffer.get(0, 0).char.should eq 'H'
+      buffer.get(7, 0).char.should eq '…'
+      buffer.get(0, 1).char.should eq ' '  # no second line
+    end
   end
 end
