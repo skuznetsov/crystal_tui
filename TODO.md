@@ -40,11 +40,10 @@
 ### Missing (Priority: MEDIUM)
 - [ ] Dock property: `dock` (top, bottom, left, right)
 - [ ] Offset: `offset`, `offset-x`, `offset-y`
-- [ ] Visual properties:
+- [x] Visual properties: `visibility` (visible, hidden), `display` (block, none)
+- [ ] Remaining visual properties:
   - [ ] `opacity`, `text-opacity`
   - [ ] `tint`, `background-tint`
-  - [ ] `visibility` (visible, hidden)
-  - [ ] `display` (block, none)
 - [ ] Text properties:
   - [ ] `text-wrap` (wrap, nowrap)
   - [ ] `text-overflow` (ellipsis, clip)
@@ -62,7 +61,7 @@
 
 ## 2. Widgets
 
-### Current Widgets (33)
+### Current Widgets (36)
 - [x] Panel - container with border/title
 - [x] Button - clickable button
 - [x] Label - text display
@@ -103,14 +102,14 @@
 - [x] **Sparkline** - Mini chart
 
 #### Priority 3 - Nice to Have
-- [ ] **MaskedInput** - Input with format mask
-- [ ] **Digits** - Large number display
+- [x] **Slider** - Range slider with keyboard/mouse
+- [x] **MaskedInput** - Input with format mask (phone, date, etc.)
+- [x] **Digits** - Large ASCII art number display
 - [ ] **Placeholder** - Dev placeholder widget
 - [ ] **Pretty** - Pretty-print data structures
 - [ ] **Calendar** - Date picker
 - [ ] **TimePicker** - Time selection
 - [ ] **ColorPicker** - Color selection
-- [ ] **Slider** - Range slider
 
 ---
 

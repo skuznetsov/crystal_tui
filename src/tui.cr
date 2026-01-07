@@ -79,6 +79,9 @@ require "./tui/widgets/log"
 require "./tui/widgets/sparkline"
 require "./tui/widgets/selection_list"
 require "./tui/widgets/link"
+require "./tui/widgets/slider"
+require "./tui/widgets/masked_input"
+require "./tui/widgets/digits"
 
 # Markdown
 require "./tui/markdown/parser"

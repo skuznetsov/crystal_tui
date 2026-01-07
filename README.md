@@ -59,11 +59,13 @@ HelloWorld.new.run
 ### Input
 - `Button` - Clickable button
 - `Input` - Single-line text input
+- `MaskedInput` - Input with format mask (phone, date)
 - `TextEditor` - Multi-line editor
 - `Checkbox` - Toggle checkbox
 - `RadioGroup` - Radio button group
 - `ComboBox` - Dropdown select
 - `Switch` - iOS-style toggle
+- `Slider` - Range slider
 
 ### Display
 - `Label` - Text display
@@ -74,6 +76,7 @@ HelloWorld.new.run
 - `Toast` - Popup notifications
 - `Rule` - Visual divider
 - `Sparkline` - Mini trend chart
+- `Digits` - Large ASCII art numbers
 
 ### Data
 - `DataTable` - Data grid with sorting

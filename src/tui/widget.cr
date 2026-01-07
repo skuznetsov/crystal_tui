@@ -421,6 +421,12 @@ module Tui
         case property
         when "visible"
           @visible = value == true || value == "true"
+        when "visibility"
+          # CSS visibility: visible | hidden
+          @visible = value.to_s.downcase != "hidden"
+        when "display"
+          # CSS display: block | none
+          @visible = value.to_s.downcase != "none"
         when "z-index"
           @z_index = value.as?(Int32) || 0
 
