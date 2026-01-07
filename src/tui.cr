@@ -66,6 +66,10 @@ require "./tui/widgets/radio_group"
 require "./tui/widgets/combo_box"
 require "./tui/widgets/draggable_window"
 
+# Markdown
+require "./tui/markdown/parser"
+require "./tui/markdown/view"
+
 # Application
 require "./tui/app"
 
