@@ -229,7 +229,7 @@ module Tui
           end
         end
       when MouseEvent
-        if event.action.click? && event.in_rect?(@rect)
+        if event.action.press? && event.button.left? && event.in_rect?(@rect)
           # Calculate clicked item index
           relative_y = event.y - @rect.y
           clicked_index = @scroll_offset + relative_y // @item_height

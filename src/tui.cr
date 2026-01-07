@@ -92,6 +92,10 @@ require "./tui/widgets/pretty"
 require "./tui/markdown/parser"
 require "./tui/markdown/view"
 
+# TUML - TUI Markup Language
+require "./tui/tuml/parser"
+require "./tui/tuml/builder"
+
 # Application
 require "./tui/app"
 

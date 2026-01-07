@@ -248,6 +248,42 @@ docs/
 
 ---
 
+## 7. TUML - TUI Markup Language
+
+### Current State ✓
+- [x] Pug-style syntax (`.tui` files)
+- [x] YAML format (`.tui.yaml` files)
+- [x] JSON format (`.tui.json` files)
+- [x] Parser with auto-detection
+- [x] Builder with widget registry
+
+### Example Syntax
+```pug
+# Pug-style (.tui)
+Panel#main(title="App")
+  Label#status Ready
+  Button#submit.primary Click me
+```
+
+```yaml
+# YAML (.tui.yaml)
+Panel#main:
+  title: App
+  children:
+    - Label#status: Ready
+    - Button#submit:
+        classes: [primary]
+        text: Click me
+```
+
+### Remaining
+- [ ] File-based loading (`App.from_tui("app.tui")`)
+- [ ] Event binding syntax
+- [ ] Include/import support
+- [ ] Visual TUML editor
+
+---
+
 ## Resources
 
 - [Textual Documentation](https://textual.textualize.io/)
