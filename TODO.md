@@ -280,7 +280,56 @@ Panel#main:
 - [ ] File-based loading (`App.from_tui("app.tui")`)
 - [ ] Event binding syntax
 - [ ] Include/import support
-- [ ] Visual TUML editor
+
+---
+
+## 8. TUI Editor (Built with Crystal TUI)
+
+### Vision
+A visual TUML editor built entirely with Crystal TUI itself — dogfooding the framework.
+
+### Features
+```
+┌─ TUI Editor ─────────────────────────────────────────────────────┐
+│ ┌─ Widget Palette ─┐ ┌─ Canvas ──────────────────┐ ┌─ Props ───┐│
+│ │ □ Panel          │ │ ┌─ My App ─────────────┐  │ │ id: main  ││
+│ │ □ Button         │ │ │ ┌─────────────────┐  │  │ │ title:    ││
+│ │ □ Label          │ │ │ │  Hello World    │  │  │ │ border:   ││
+│ │ □ Input          │ │ │ └─────────────────┘  │  │ │           ││
+│ │ □ Checkbox       │ │ │ [ Submit ]           │  │ │ Classes:  ││
+│ │ □ ...            │ │ └──────────────────────┘  │ │ □ primary ││
+│ └──────────────────┘ └───────────────────────────┘ └───────────┘│
+│ ┌─ Code Preview ────────────────────────────────────────────────┐│
+│ │ Panel#main(title="My App")                                    ││
+│ │   Label Hello World                                           ││
+│ │   Button#submit Submit                                        ││
+│ └───────────────────────────────────────────────────────────────┘│
+│ [F1] Help  [F5] Preview  [Ctrl+S] Save  [Ctrl+O] Open           │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Core Components
+- [ ] Widget Palette - Drag & drop widget selection
+- [ ] Visual Canvas - WYSIWYG widget placement
+- [ ] Property Inspector - Edit widget attributes
+- [ ] Tree View - Widget hierarchy navigator
+- [ ] Code Preview - Live TUML/Crystal output
+- [ ] Theme Preview - Dark/light mode toggle
+
+### Interactions
+- [ ] Drag widgets from palette to canvas
+- [ ] Click to select, double-click to edit
+- [ ] Resize widgets with mouse
+- [ ] Keyboard shortcuts for common actions
+- [ ] Undo/redo support
+
+### Export Formats
+- [ ] TUML (Pug, YAML, JSON)
+- [ ] Crystal code
+- [ ] Standalone executable
+
+### Meta Goal
+Prove Crystal TUI can build complex, real-world applications
 
 ---
 
