@@ -1,5 +1,36 @@
 # Base widget class
 module Tui
+  # Box model for margins and padding (in cells)
+  struct BoxModel
+    property top : Int32
+    property right : Int32
+    property bottom : Int32
+    property left : Int32
+
+    def initialize(@top : Int32 = 0, @right : Int32 = 0, @bottom : Int32 = 0, @left : Int32 = 0)
+    end
+
+    def self.zero : BoxModel
+      new(0, 0, 0, 0)
+    end
+
+    def self.all(value : Int32) : BoxModel
+      new(value, value, value, value)
+    end
+
+    def self.symmetric(vertical : Int32, horizontal : Int32) : BoxModel
+      new(vertical, horizontal, vertical, horizontal)
+    end
+
+    def horizontal : Int32
+      @left + @right
+    end
+
+    def vertical : Int32
+      @top + @bottom
+    end
+  end
+
   abstract class Widget
     include Reactive
 
@@ -13,6 +44,11 @@ module Tui
 
     # Geometry (set by layout engine)
     property rect : Rect = Rect.zero
+
+    # Layout constraints (CSS-driven)
+    property constraints : Constraints = Constraints.default
+    property margin : BoxModel = BoxModel.zero
+    property padding : BoxModel = BoxModel.zero
 
     # State
     property? visible : Bool = true
@@ -357,10 +393,124 @@ module Tui
           @visible = value == true || value == "true"
         when "z-index"
           @z_index = value.as?(Int32) || 0
-        # Add more base properties as needed
+
+        # Layout dimensions
+        when "width"
+          @constraints = Constraints.new(
+            width: parse_dimension(value),
+            height: @constraints.height,
+            min_width: @constraints.min_width,
+            max_width: @constraints.max_width,
+            min_height: @constraints.min_height,
+            max_height: @constraints.max_height
+          )
+        when "height"
+          @constraints = Constraints.new(
+            width: @constraints.width,
+            height: parse_dimension(value),
+            min_width: @constraints.min_width,
+            max_width: @constraints.max_width,
+            min_height: @constraints.min_height,
+            max_height: @constraints.max_height
+          )
+        when "min-width"
+          @constraints = Constraints.new(
+            width: @constraints.width,
+            height: @constraints.height,
+            min_width: value.as?(Int32),
+            max_width: @constraints.max_width,
+            min_height: @constraints.min_height,
+            max_height: @constraints.max_height
+          )
+        when "max-width"
+          @constraints = Constraints.new(
+            width: @constraints.width,
+            height: @constraints.height,
+            min_width: @constraints.min_width,
+            max_width: value.as?(Int32),
+            min_height: @constraints.min_height,
+            max_height: @constraints.max_height
+          )
+        when "min-height"
+          @constraints = Constraints.new(
+            width: @constraints.width,
+            height: @constraints.height,
+            min_width: @constraints.min_width,
+            max_width: @constraints.max_width,
+            min_height: value.as?(Int32),
+            max_height: @constraints.max_height
+          )
+        when "max-height"
+          @constraints = Constraints.new(
+            width: @constraints.width,
+            height: @constraints.height,
+            min_width: @constraints.min_width,
+            max_width: @constraints.max_width,
+            min_height: @constraints.min_height,
+            max_height: value.as?(Int32)
+          )
+
+        # Box model - margins
+        when "margin"
+          @margin = parse_box_model(value.to_s)
+        when "margin-top"
+          @margin = BoxModel.new(value.as?(Int32) || 0, @margin.right, @margin.bottom, @margin.left)
+        when "margin-right"
+          @margin = BoxModel.new(@margin.top, value.as?(Int32) || 0, @margin.bottom, @margin.left)
+        when "margin-bottom"
+          @margin = BoxModel.new(@margin.top, @margin.right, value.as?(Int32) || 0, @margin.left)
+        when "margin-left"
+          @margin = BoxModel.new(@margin.top, @margin.right, @margin.bottom, value.as?(Int32) || 0)
+
+        # Box model - padding
+        when "padding"
+          @padding = parse_box_model(value.to_s)
+        when "padding-top"
+          @padding = BoxModel.new(value.as?(Int32) || 0, @padding.right, @padding.bottom, @padding.left)
+        when "padding-right"
+          @padding = BoxModel.new(@padding.top, value.as?(Int32) || 0, @padding.bottom, @padding.left)
+        when "padding-bottom"
+          @padding = BoxModel.new(@padding.top, @padding.right, value.as?(Int32) || 0, @padding.left)
+        when "padding-left"
+          @padding = BoxModel.new(@padding.top, @padding.right, @padding.bottom, value.as?(Int32) || 0)
         end
       end
       mark_dirty!
+    end
+
+    # Parse dimension value from CSS (e.g., "50", "50%", "1fr", "auto")
+    private def parse_dimension(value : CSS::Value) : Dimension
+      str = value.to_s.strip
+      case str
+      when "auto"
+        Dimension.auto
+      when /^(\d+)fr$/
+        Dimension.fr($1.to_i)
+      when /^(\d+(?:\.\d+)?)%$/
+        Dimension.percent($1.to_f)
+      when /^(\d+)(?:px)?$/
+        Dimension.px($1.to_i)
+      else
+        Dimension.auto
+      end
+    end
+
+    # Parse box model value (margin/padding) - supports 1, 2, or 4 values
+    private def parse_box_model(value : String) : BoxModel
+      parts = value.strip.split(/\s+/).map(&.to_i?)
+      case parts.size
+      when 1
+        v = parts[0] || 0
+        BoxModel.all(v)
+      when 2
+        vert = parts[0] || 0
+        horiz = parts[1] || 0
+        BoxModel.symmetric(vert, horiz)
+      when 4
+        BoxModel.new(parts[0] || 0, parts[1] || 0, parts[2] || 0, parts[3] || 0)
+      else
+        BoxModel.zero
+      end
     end
   end
 end

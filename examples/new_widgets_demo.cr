@@ -85,10 +85,7 @@ class NewWidgetsDemo < Tui::App
   private def create_left_panel : Tui::Panel
     panel = Tui::Panel.new("left")
     panel.title = "File Explorer"
-
-    # Add tree as child
-    panel.add_child(@tree)
-
+    panel.content = @tree
     panel
   end
 

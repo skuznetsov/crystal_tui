@@ -57,7 +57,11 @@ module Tui
     property title_align : Label::Align = Label::Align::Left
     property title_decor : TitleStyle = TitleStyle::Brackets  # Default to brackets
     property title_truncate : TitleTruncate = TitleTruncate::End
-    property padding : Int32 = 0
+
+    # Legacy uniform padding setter (use inherited BoxModel padding property)
+    def padding=(value : Int32) : Nil
+      @padding = BoxModel.all(value)
+    end
 
     # Scrolling
     property scrollable : Bool = true
@@ -256,18 +260,18 @@ module Tui
     def inner_rect : Rect
       if @border_style == BorderStyle::None || @show_borders == BorderSides.none
         return Rect.new(
-          @rect.x + @padding,
-          @rect.y + @padding,
-          Math.max(0, @rect.width - @padding * 2),
-          Math.max(0, @rect.height - @padding * 2)
+          @rect.x + @padding.left,
+          @rect.y + @padding.top,
+          Math.max(0, @rect.width - @padding.horizontal),
+          Math.max(0, @rect.height - @padding.vertical)
         )
       end
 
       # Calculate insets based on which borders are visible
-      left_inset = (@show_borders.left? ? 1 : 0) + @padding
-      right_inset = (@show_borders.right? ? 1 : 0) + @padding
-      top_inset = (@show_borders.top? ? 1 : 0) + @padding
-      bottom_inset = (@show_borders.bottom? ? 1 : 0) + @padding
+      left_inset = (@show_borders.left? ? 1 : 0) + @padding.left
+      right_inset = (@show_borders.right? ? 1 : 0) + @padding.right
+      top_inset = (@show_borders.top? ? 1 : 0) + @padding.top
+      bottom_inset = (@show_borders.bottom? ? 1 : 0) + @padding.bottom
 
       Rect.new(
         @rect.x + left_inset,

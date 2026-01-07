@@ -72,9 +72,9 @@ module Tui
 
       # Subtitle (if fits)
       unless @subtitle.empty?
-        current_x += 2
+        current_x += 1
         sub_style = Style.new(fg: @subtitle_color, bg: @bg_color)
-        buffer.set(current_x, y, '—', sub_style) if clip.contains?(current_x, y)
+        buffer.set(current_x, y, '-', sub_style) if clip.contains?(current_x, y)
         current_x += 2
         @subtitle.each_char do |char|
           break if current_x >= x + w - 10

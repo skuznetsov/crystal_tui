@@ -169,6 +169,55 @@ module Tui::CSS
         0
       end
     end
+
+    # Descendant selector: Panel Button (Button anywhere inside Panel)
+    class Descendant < Selector
+      getter ancestor : Selector
+      getter descendant : Selector
+
+      def initialize(@ancestor : Selector, @descendant : Selector)
+      end
+
+      def matches?(widget : Widget) : Bool
+        return false unless @descendant.matches?(widget)
+
+        # Walk up the parent chain looking for ancestor match
+        current = widget.parent
+        while current
+          return true if @ancestor.matches?(current)
+          current = current.parent
+        end
+        false
+      end
+
+      def specificity : Int32
+        @ancestor.specificity + @descendant.specificity
+      end
+    end
+
+    # Child selector: Panel > Button (Button is direct child of Panel)
+    class Child < Selector
+      getter parent_sel : Selector
+      getter child_sel : Selector
+
+      def initialize(@parent_sel : Selector, @child_sel : Selector)
+      end
+
+      def matches?(widget : Widget) : Bool
+        return false unless @child_sel.matches?(widget)
+
+        # Check if direct parent matches
+        if parent = widget.parent
+          @parent_sel.matches?(parent)
+        else
+          false
+        end
+      end
+
+      def specificity : Int32
+        @parent_sel.specificity + @child_sel.specificity
+      end
+    end
   end
 
   # TCSS Parser
@@ -247,6 +296,49 @@ module Tui::CSS
       skip_whitespace
       return nil if eof? || peek == '{'
 
+      # Parse first selector (may be compound like Button.active)
+      left = parse_compound_selector
+      return nil unless left
+
+      loop do
+        # Save position to detect whitespace
+        whitespace_seen = peek.try(&.whitespace?)
+        skip_whitespace
+
+        # Check for combinators or end of selector
+        case peek
+        when '{', nil
+          break
+        when '>'
+          # Child combinator: Panel > Button
+          advance
+          skip_whitespace
+          right = parse_compound_selector
+          break unless right
+          left = Selector::Child.new(left, right)
+        else
+          # If we saw whitespace and next char starts a selector, it's descendant
+          if whitespace_seen && selector_start?(peek)
+            right = parse_compound_selector
+            break unless right
+            left = Selector::Descendant.new(left, right)
+          else
+            break
+          end
+        end
+      end
+
+      left
+    end
+
+    # Check if character can start a selector
+    private def selector_start?(char : Char?) : Bool
+      return false unless char
+      char.letter? || char == '.' || char == '#' || char == '*' || char == ':'
+    end
+
+    # Parse a compound selector (e.g., Button.active:focus)
+    private def parse_compound_selector : Selector?
       selectors = [] of Selector
 
       loop do
@@ -254,15 +346,15 @@ module Tui::CSS
         break unless sel
         selectors << sel
 
-        # Check for pseudo-class
-        if peek == ':'
+        # Check for pseudo-class (attached directly, no whitespace)
+        while peek == ':'
           advance
           pseudo = parse_identifier
           selectors[-1] = Selector::Pseudo.new(selectors[-1], pseudo)
         end
 
-        skip_whitespace
-        break unless peek.try(&.alphanumeric?) || peek == '.' || peek == '#'
+        # Continue only if next char continues compound selector (no whitespace)
+        break unless peek == '.' || peek == '#'
       end
 
       case selectors.size
@@ -310,10 +402,56 @@ module Tui::CSS
         advance(5)
         false
       elsif peek.try(&.ascii_number?)
-        parse_number
+        # Look ahead to see if this is a multi-value property (e.g., "1 2 3 4" for margin)
+        # Or a dimension value (e.g., "1fr", "50%")
+        if looks_like_multi_value? || looks_like_dimension?
+          parse_string_value
+        else
+          parse_number
+        end
       else
         parse_string_value
       end
+    end
+
+    # Check if current position looks like multiple space-separated values
+    private def looks_like_multi_value? : Bool
+      # Save position
+      saved_pos = @pos
+
+      # Skip past first number
+      while peek.try(&.ascii_number?)
+        advance
+      end
+
+      # Check if there's a space followed by another number (multi-value)
+      is_whitespace = peek.try(&.whitespace?) == true
+      skip_whitespace
+      has_more = (peek.try(&.ascii_number?) == true) || (peek.try(&.letter?) == true)
+
+      # Restore position
+      @pos = saved_pos
+
+      is_whitespace && has_more
+    end
+
+    # Check if current position looks like a dimension (1fr, 50%, 10px)
+    private def looks_like_dimension? : Bool
+      # Save position
+      saved_pos = @pos
+
+      # Skip past number (including decimals)
+      while peek.try { |c| c.ascii_number? || c == '.' }
+        advance
+      end
+
+      # Check for dimension suffix (fr, %, px, em, etc.)
+      has_suffix = peek == '%' || (peek.try(&.letter?) == true)
+
+      # Restore position
+      @pos = saved_pos
+
+      has_suffix
     end
 
     private def parse_hex_color : Color

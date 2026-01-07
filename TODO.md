@@ -17,9 +17,14 @@
 - [x] Colors (hex `#ff0`, rgb `rgb(255,0,0)`)
 - [x] Comments (`/* */`, `//`)
 
+### Recently Added ✓
+- [x] Descendant selector (`Panel Button`)
+- [x] Child selector (`Panel > Button`)
+- [x] Layout properties: `width`, `height`, `min-width`, `max-width`, `min-height`, `max-height`
+- [x] Box model: `margin`, `margin-top/right/bottom/left`, `padding`, `padding-top/right/bottom/left`
+- [x] Dimension units: `px`, `%`, `fr`, `auto`
+
 ### Missing (Priority: HIGH)
-- [ ] Descendant selector (`Panel Button`)
-- [ ] Child selector (`Panel > Button`)
 - [ ] More pseudo-classes:
   - [ ] `:hover`
   - [ ] `:empty`
@@ -85,18 +90,18 @@
 
 ### Missing Widgets (Priority Order)
 
-#### Priority 1 - Essential
-- [ ] **Header** - App title bar with clock/status
-- [ ] **Tree** - Generic tree view (not just files)
-- [ ] **Switch** - iOS-style toggle switch
-- [ ] **LoadingIndicator** - Spinner/loading animation
-- [ ] **Toast/Notification** - Popup notifications
+#### Priority 1 - Essential ✓
+- [x] **Header** - App title bar with clock/status
+- [x] **Tree** - Generic tree view (not just files)
+- [x] **Switch** - iOS-style toggle switch
+- [x] **LoadingIndicator** - Spinner/loading animation
+- [x] **Toast/Notification** - Popup notifications
+- [x] **Rule** - Horizontal/vertical divider
 
 #### Priority 2 - Common
 - [ ] **ListView** - Virtual scrolling list
 - [ ] **SelectionList** - Multi-select list
 - [ ] **Log/RichLog** - Scrolling log viewer
-- [ ] **Rule** - Horizontal/vertical divider
 - [ ] **Link** - Clickable URL
 - [ ] **Sparkline** - Mini chart
 
@@ -130,11 +135,11 @@
 └─────────────────┘
 ```
 
-### Tasks
-- [ ] FSEvent watcher for `.tcss` files
-- [ ] CSS cache invalidation
-- [ ] Widget style recomputation
-- [ ] Smooth re-render without flicker
+### Tasks ✓
+- [x] File watcher for `.tcss` files (polling-based, cross-platform)
+- [x] CSS cache invalidation
+- [x] Widget style recomputation
+- [x] Smooth re-render without flicker
 - [ ] Dev mode flag (`--dev` or `TUI_DEV=1`)
 - [ ] Error overlay for CSS parse errors
 
