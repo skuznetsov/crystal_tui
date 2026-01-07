@@ -4,7 +4,7 @@ A modern, Textual-inspired TUI (Terminal User Interface) framework for Crystal.
 
 ## Features
 
-- **Rich Widget Library**: 27+ widgets including Panel, Button, Input, DataTable, Tree, Toast, and more
+- **Rich Widget Library**: 30+ widgets including Panel, Button, Input, DataTable, Tree, ListView, Log, and more
 - **CSS Styling**: Textual-compatible CSS (TCSS) for styling with variables, selectors, and hot reload
 - **Flexible Layout**: Flexbox-like layout engine with fr units, percentages, and constraints
 - **Event System**: Comprehensive keyboard and mouse event handling
@@ -72,10 +72,13 @@ HelloWorld.new.run
 - `LoadingIndicator` - Animated spinner
 - `Toast` - Popup notifications
 - `Rule` - Visual divider
+- `Sparkline` - Mini trend chart
 
 ### Data
 - `DataTable` - Data grid with sorting
 - `Tree` - Hierarchical tree view
+- `ListView` - Virtual scrolling list
+- `Log` - Scrolling log viewer with levels
 - `FilePanel` - File browser
 - `TextViewer` - Scrollable text
 - `MarkdownView` - Markdown renderer

@@ -115,7 +115,7 @@ module Tui::CSS
       end
     end
 
-    # Pseudo-class selector: :focus, :hover
+    # Pseudo-class selector: :focus, :hover, :first-child, etc.
     class Pseudo < Selector
       getter base : Selector
       getter pseudo : String
@@ -129,12 +129,66 @@ module Tui::CSS
         case @pseudo
         when "focus", "focused"
           widget.focused?
+        when "hover", "hovered"
+          widget.responds_to?(:hovered?) && widget.hovered?
         when "visible"
           widget.visible?
         when "disabled"
           widget.responds_to?(:disabled?) && widget.disabled?
+        when "enabled"
+          !widget.responds_to?(:disabled?) || !widget.disabled?
+        when "empty"
+          widget.children.empty?
+        when "first-child"
+          is_first_child?(widget)
+        when "last-child"
+          is_last_child?(widget)
+        when "only-child"
+          is_only_child?(widget)
+        when "even"
+          child_index(widget).try { |i| i.even? } || false
+        when "odd"
+          child_index(widget).try { |i| i.odd? } || false
+        else
+          # Handle :nth-child(n)
+          if @pseudo.starts_with?("nth-child(") && @pseudo.ends_with?(")")
+            n = @pseudo[10..-2].to_i?
+            n ? child_index(widget) == n - 1 : false
+          else
+            false
+          end
+        end
+      end
+
+      private def is_first_child?(widget : Widget) : Bool
+        if parent = widget.parent
+          parent.children.first? == widget
         else
           false
+        end
+      end
+
+      private def is_last_child?(widget : Widget) : Bool
+        if parent = widget.parent
+          parent.children.last? == widget
+        else
+          false
+        end
+      end
+
+      private def is_only_child?(widget : Widget) : Bool
+        if parent = widget.parent
+          parent.children.size == 1 && parent.children.first? == widget
+        else
+          false
+        end
+      end
+
+      private def child_index(widget : Widget) : Int32?
+        if parent = widget.parent
+          parent.children.index(widget)
+        else
+          nil
         end
       end
 

@@ -24,19 +24,18 @@
 - [x] Box model: `margin`, `margin-top/right/bottom/left`, `padding`, `padding-top/right/bottom/left`
 - [x] Dimension units: `px`, `%`, `fr`, `auto`
 
-### Missing (Priority: HIGH)
-- [ ] More pseudo-classes:
-  - [ ] `:hover`
-  - [ ] `:empty`
-  - [ ] `:first-child`, `:last-child`, `:nth-child(n)`
-  - [ ] `:dark`, `:light` (theme-aware)
-  - [ ] `:even`, `:odd`
-- [ ] Layout properties:
-  - [ ] `width`, `height`, `min-width`, `max-width`, `min-height`, `max-height`
-  - [ ] `margin`, `margin-top/right/bottom/left`
-  - [ ] `padding`, `padding-top/right/bottom/left`
-  - [ ] `dock` (top, bottom, left, right)
-  - [ ] `offset`, `offset-x`, `offset-y`
+### Pseudo-classes ✓
+- [x] `:hover` - mouse hover state
+- [x] `:empty` - no children
+- [x] `:first-child`, `:last-child`, `:only-child`
+- [x] `:nth-child(n)` - nth child selector
+- [x] `:even`, `:odd` - even/odd children
+- [x] `:enabled`, `:disabled` - form states
+
+### Missing (Priority: MEDIUM)
+- [ ] Theme pseudo-classes: `:dark`, `:light`
+- [ ] Dock property: `dock` (top, bottom, left, right)
+- [ ] Offset: `offset`, `offset-x`, `offset-y`
 - [ ] Grid layout:
   - [ ] `layout: grid`
   - [ ] `grid-columns`, `grid-rows`, `grid-gutter`
@@ -98,12 +97,12 @@
 - [x] **Toast/Notification** - Popup notifications
 - [x] **Rule** - Horizontal/vertical divider
 
-#### Priority 2 - Common
-- [ ] **ListView** - Virtual scrolling list
+#### Priority 2 - Common ✓
+- [x] **ListView** - Virtual scrolling list
 - [ ] **SelectionList** - Multi-select list
-- [ ] **Log/RichLog** - Scrolling log viewer
+- [x] **Log/RichLog** - Scrolling log viewer
 - [ ] **Link** - Clickable URL
-- [ ] **Sparkline** - Mini chart
+- [x] **Sparkline** - Mini chart
 
 #### Priority 3 - Nice to Have
 - [ ] **MaskedInput** - Input with format mask

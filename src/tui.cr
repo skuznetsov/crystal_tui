@@ -73,6 +73,9 @@ require "./tui/widgets/header"
 require "./tui/widgets/toast"
 require "./tui/widgets/tree"
 require "./tui/widgets/rule"
+require "./tui/widgets/list_view"
+require "./tui/widgets/log"
+require "./tui/widgets/sparkline"
 
 # Markdown
 require "./tui/markdown/parser"

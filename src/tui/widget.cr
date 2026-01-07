@@ -55,12 +55,14 @@ module Tui
     property? mounted : Bool = false
     property? focusable : Bool = false  # Can receive focus
     @focused : Bool = false
+    @hovered : Bool = false
 
     # Z-order (higher = on top)
     property z_index : Int32 = 0
 
-    # Global focus tracking
+    # Global focus and hover tracking
     class_property focused_widget : Widget? = nil
+    class_property hovered_widget : Widget? = nil
 
     # Dirty flag for re-rendering
     @dirty : Bool = true
@@ -109,6 +111,34 @@ module Tui
     # Alias for focus (bang version for Button etc.)
     def focus! : Nil
       focus
+    end
+
+    # Hover management
+    def hovered? : Bool
+      @hovered
+    end
+
+    def hovered=(value : Bool) : Nil
+      if value
+        # Clear previous hover
+        if old = Widget.hovered_widget
+          if old != self
+            old.clear_hover_internal
+          end
+        end
+        Widget.hovered_widget = self
+        @hovered = true
+        mark_dirty!
+      else
+        @hovered = false
+        Widget.hovered_widget = nil if Widget.hovered_widget == self
+        mark_dirty!
+      end
+    end
+
+    protected def clear_hover_internal : Nil
+      @hovered = false
+      mark_dirty!
     end
 
     # Collect all focusable widgets in tree order (depth-first)
