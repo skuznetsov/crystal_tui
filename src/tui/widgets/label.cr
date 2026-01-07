@@ -163,7 +163,7 @@ module Tui
         when "underline" then attrs |= Attributes::Underline
         when "blink"     then attrs |= Attributes::Blink
         when "reverse"   then attrs |= Attributes::Reverse
-        when "strike"    then attrs |= Attributes::Strike
+        when "strike", "strikethrough" then attrs |= Attributes::Strikethrough
         end
       end
       attrs
