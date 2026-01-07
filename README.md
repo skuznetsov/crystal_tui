@@ -68,6 +68,7 @@ HelloWorld.new.run
 - `Slider` - Range slider
 - `Calendar` - Date picker
 - `ColorPicker` - Color selection (16/256 colors)
+- `TimePicker` - Time selection (24h/12h)
 
 ### Display
 - `Label` - Text display
@@ -79,6 +80,8 @@ HelloWorld.new.run
 - `Rule` - Visual divider
 - `Sparkline` - Mini trend chart
 - `Digits` - Large ASCII art numbers
+- `Placeholder` - Development placeholder
+- `Pretty` - Pretty-print data structures
 
 ### Data
 - `DataTable` - Data grid with sorting

@@ -84,6 +84,9 @@ require "./tui/widgets/masked_input"
 require "./tui/widgets/digits"
 require "./tui/widgets/calendar"
 require "./tui/widgets/color_picker"
+require "./tui/widgets/time_picker"
+require "./tui/widgets/placeholder"
+require "./tui/widgets/pretty"
 
 # Markdown
 require "./tui/markdown/parser"
