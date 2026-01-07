@@ -100,7 +100,7 @@ describe Tui::Label do
       buffer.get(4, 2).char.should eq '3'
     end
 
-    it "truncates long lines to fit width" do
+    it "truncates long lines to fit width with ellipsis" do
       buffer = Tui::Buffer.new(10, 1)
       label = Tui::Label.new("This is a very long text")
       label.rect = Tui::Rect.new(0, 0, 5, 1)
@@ -108,8 +108,20 @@ describe Tui::Label do
       label.render(buffer, label.rect)
 
       buffer.get(0, 0).char.should eq 'T'
-      buffer.get(4, 0).char.should eq ' '  # "This "
+      buffer.get(4, 0).char.should eq '…'  # ellipsis at end
       buffer.get(5, 0).char.should eq ' '  # outside rect, unchanged
+    end
+
+    it "truncates long lines with clip mode" do
+      buffer = Tui::Buffer.new(10, 1)
+      label = Tui::Label.new("This is a very long text")
+      label.text_overflow = Tui::Label::TextOverflow::Clip
+      label.rect = Tui::Rect.new(0, 0, 5, 1)
+
+      label.render(buffer, label.rect)
+
+      buffer.get(0, 0).char.should eq 'T'
+      buffer.get(4, 0).char.should eq ' '  # "This " clipped
     end
 
     it "truncates lines beyond height" do

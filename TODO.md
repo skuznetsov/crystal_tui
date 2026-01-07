@@ -37,16 +37,17 @@
 - [x] Text properties: `text-align`, `text-style`, `color`
 - [x] Grid layout: `Grid` container with `grid-columns`, `grid-rows`, `grid-gutter`, `column-span`, `row-span`
 
-### Missing (Priority: MEDIUM)
-- [ ] Dock property: `dock` (top, bottom, left, right)
+### Recently Added (Phase 3) ✓
+- [x] Dock property: `dock` (top, bottom, left, right)
+- [x] Text overflow: `text-overflow` (ellipsis, clip)
+
+### Missing (Priority: LOW)
 - [ ] Offset: `offset`, `offset-x`, `offset-y`
-- [x] Visual properties: `visibility` (visible, hidden), `display` (block, none)
 - [ ] Remaining visual properties:
   - [ ] `opacity`, `text-opacity`
   - [ ] `tint`, `background-tint`
 - [ ] Text properties:
   - [ ] `text-wrap` (wrap, nowrap)
-  - [ ] `text-overflow` (ellipsis, clip)
 - [ ] Border properties:
   - [ ] `border-title-color`, `border-title-style`
   - [ ] `border-subtitle-*`

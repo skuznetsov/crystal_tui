@@ -9,9 +9,15 @@ module Tui
       Right
     end
 
+    enum TextOverflow
+      Clip      # Just cut off
+      Ellipsis  # Add ... at end
+    end
+
     reactive text : String = ""
     property style : Style = Style.default
     property align : Align = Align::Left
+    property text_overflow : TextOverflow = TextOverflow::Ellipsis
 
     def initialize(
       @text : String = "",
@@ -60,7 +66,12 @@ module Tui
         break if line_idx >= @rect.height
 
         # Truncate line to fit width (using display width)
-        display_line = Unicode.display_width(line) > @rect.width ? Unicode.truncate(line, @rect.width, "") : line
+        ellipsis = @text_overflow.ellipsis? ? "…" : ""
+        display_line = if Unicode.display_width(line) > @rect.width
+                         Unicode.truncate(line, @rect.width, ellipsis)
+                       else
+                         line
+                       end
         line_width = Unicode.display_width(display_line)
 
         # Calculate x position based on alignment
@@ -127,6 +138,12 @@ module Tui
         when "text-style"
           attrs = parse_text_style(value.to_s)
           @style = Style.new(fg: @style.fg, bg: @style.bg, attrs: attrs)
+        when "text-overflow"
+          @text_overflow = case value.to_s.downcase
+                           when "clip"     then TextOverflow::Clip
+                           when "ellipsis" then TextOverflow::Ellipsis
+                           else                 TextOverflow::Ellipsis
+                           end
         end
       end
     end

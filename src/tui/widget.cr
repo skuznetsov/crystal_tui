@@ -50,6 +50,17 @@ module Tui
     property margin : BoxModel = BoxModel.zero
     property padding : BoxModel = BoxModel.zero
 
+    # Dock position (CSS dock property)
+    enum Dock
+      None
+      Top
+      Bottom
+      Left
+      Right
+    end
+
+    property dock : Dock = Dock::None
+
     # State
     property? visible : Bool = true
     property? mounted : Bool = false
@@ -429,6 +440,14 @@ module Tui
           @visible = value.to_s.downcase != "none"
         when "z-index"
           @z_index = value.as?(Int32) || 0
+        when "dock"
+          @dock = case value.to_s.downcase
+                  when "top"    then Dock::Top
+                  when "bottom" then Dock::Bottom
+                  when "left"   then Dock::Left
+                  when "right"  then Dock::Right
+                  else               Dock::None
+                  end
 
         # Layout dimensions
         when "width"
