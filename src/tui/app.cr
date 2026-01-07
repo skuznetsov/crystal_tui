@@ -14,6 +14,13 @@ module Tui
   class_property current_app : App? = nil
   class_property theme : Theme = Theme::Dark
 
+  # Dev mode - enables hot reload and debug features
+  # Set via TUI_DEV=1 environment variable or programmatically
+  class_property? dev_mode : Bool = ENV.has_key?("TUI_DEV") && ENV["TUI_DEV"] == "1"
+
+  # Last CSS error (for error overlay)
+  class_property css_error : {path: String, error: String}? = nil
+
   abstract class App < Widget
     @buffer : Buffer
     @input : InputParser
@@ -36,6 +43,11 @@ module Tui
       # Load CSS if path is set
       if css_path = self.class.css_path
         load_css(css_path)
+
+        # Auto-enable hot reload in dev mode
+        if Tui.dev_mode?
+          enable_css_hot_reload(css_path)
+        end
       end
     end
 
@@ -64,8 +76,23 @@ module Tui
       return unless css_path
 
       @css_hot_reload = CSS::HotReload.new(interval)
-      @css_hot_reload.not_nil!.watch_for_app(css_path, self)
-      @css_hot_reload.not_nil!.start
+      hr = @css_hot_reload.not_nil!
+
+      # Set up error handler to capture CSS errors
+      hr.on_error = ->(path : String, ex : Exception) {
+        Tui.css_error = {path: path, error: ex.message || "Unknown error"}
+        mark_dirty!
+        nil
+      }
+
+      # Clear error on successful reload
+      hr.on_reload = ->(path : String) {
+        Tui.css_error = nil
+        nil
+      }
+
+      hr.watch_for_app(css_path, self)
+      hr.start
     end
 
     # Get current stylesheet
@@ -259,6 +286,11 @@ module Tui
         overlay.call(@buffer, full_clip)
       end
 
+      # Render CSS error overlay in dev mode
+      if Tui.dev_mode? && (css_error = Tui.css_error)
+        render_css_error_overlay(@buffer, full_clip, css_error)
+      end
+
       # Flush to terminal
       @buffer.flush(STDOUT)
       mark_clean!
@@ -266,6 +298,79 @@ module Tui
 
     def render(buffer : Buffer, clip : Rect) : Nil
       # App renders itself via render_all
+    end
+
+    # Render CSS error overlay (dev mode only)
+    private def render_css_error_overlay(buffer : Buffer, clip : Rect, error : {path: String, error: String}) : Nil
+      # Error box dimensions
+      error_style = Style.new(fg: Color.white, bg: Color.red, attrs: Attributes::Bold)
+      path_style = Style.new(fg: Color.yellow, bg: Color.red)
+      msg_style = Style.new(fg: Color.white, bg: Color.red)
+
+      lines = [] of String
+      lines << " CSS Error "
+      lines << ""
+      lines << " File: #{error[:path]} "
+      lines << ""
+
+      # Wrap error message
+      error[:error].split('\n').each do |line|
+        lines << " #{line} "
+      end
+      lines << ""
+      lines << " Fix the error to reload "
+
+      # Calculate box size
+      max_width = lines.map { |l| Unicode.display_width(l) }.max
+      box_width = Math.min(max_width + 4, clip.width - 4)
+      box_height = Math.min(lines.size + 2, clip.height - 2)
+
+      # Center the box
+      box_x = clip.x + (clip.width - box_width) // 2
+      box_y = clip.y + 1  # Near top
+
+      # Draw background
+      box_height.times do |dy|
+        box_width.times do |dx|
+          buffer.set(box_x + dx, box_y + dy, ' ', error_style)
+        end
+      end
+
+      # Draw border
+      buffer.set(box_x, box_y, '┌', error_style)
+      buffer.set(box_x + box_width - 1, box_y, '┐', error_style)
+      buffer.set(box_x, box_y + box_height - 1, '└', error_style)
+      buffer.set(box_x + box_width - 1, box_y + box_height - 1, '┘', error_style)
+
+      (1...box_width - 1).each do |dx|
+        buffer.set(box_x + dx, box_y, '─', error_style)
+        buffer.set(box_x + dx, box_y + box_height - 1, '─', error_style)
+      end
+
+      (1...box_height - 1).each do |dy|
+        buffer.set(box_x, box_y + dy, '│', error_style)
+        buffer.set(box_x + box_width - 1, box_y + dy, '│', error_style)
+      end
+
+      # Draw title
+      title = " CSS Error "
+      title_x = box_x + (box_width - Unicode.display_width(title)) // 2
+      title.each_char_with_index do |char, i|
+        buffer.set(title_x + i, box_y, char, error_style)
+      end
+
+      # Draw content
+      content_y = box_y + 2
+      lines[2..].each_with_index do |line, idx|
+        break if content_y + idx >= box_y + box_height - 1
+
+        style = idx == 0 ? path_style : msg_style  # File path in yellow
+        x = box_x + 2
+        line.each_char_with_index do |char, i|
+          break if x + i >= box_x + box_width - 2
+          buffer.set(x + i, content_y + idx, char, style)
+        end
+      end
     end
 
     def handle_event(event : Event) : Bool

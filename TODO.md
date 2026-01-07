@@ -138,8 +138,8 @@
 - [x] CSS cache invalidation
 - [x] Widget style recomputation
 - [x] Smooth re-render without flicker
-- [ ] Dev mode flag (`--dev` or `TUI_DEV=1`)
-- [ ] Error overlay for CSS parse errors
+- [x] Dev mode flag (`TUI_DEV=1` environment variable)
+- [x] Error overlay for CSS parse errors (red box with error details)
 
 ---
 
