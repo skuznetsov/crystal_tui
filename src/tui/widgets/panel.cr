@@ -303,6 +303,94 @@ module Tui
       end
     end
 
+    # Override to handle Panel-specific CSS properties
+    def apply_css_style(css_style : Hash(String, CSS::Value)) : Nil
+      super(css_style)
+
+      css_style.each do |property, value|
+        case property
+        when "border"
+          # border: <style> <color> (e.g., "light white")
+          parts = value.to_s.split(/\s+/, 2)
+          if parts.size >= 1
+            @border_style = parse_border_style(parts[0])
+          end
+          if parts.size >= 2
+            if color = parse_css_color(parts[1])
+              @border_color = color
+            end
+          end
+        when "border-style"
+          @border_style = parse_border_style(value.to_s)
+        when "border-color"
+          if color = parse_css_color(value.to_s)
+            @border_color = color
+          end
+        when "border-title-color", "title-color"
+          if color = parse_css_color(value.to_s)
+            @title_color = color
+          end
+        when "border-title-style", "title-style"
+          @title_decor = case value.to_s.downcase
+                         when "brackets" then TitleStyle::Brackets
+                         when "spaces"   then TitleStyle::Spaces
+                         when "none"     then TitleStyle::None
+                         else                 TitleStyle::Brackets
+                         end
+        when "title-align"
+          @title_align = case value.to_s.downcase
+                         when "left"   then Label::Align::Left
+                         when "center" then Label::Align::Center
+                         when "right"  then Label::Align::Right
+                         else               Label::Align::Left
+                         end
+        end
+      end
+    end
+
+    private def parse_border_style(value : String) : BorderStyle
+      case value.downcase
+      when "light"  then BorderStyle::Light
+      when "heavy"  then BorderStyle::Heavy
+      when "double" then BorderStyle::Double
+      when "round"  then BorderStyle::Round
+      when "ascii"  then BorderStyle::Ascii
+      when "none"   then BorderStyle::None
+      else               BorderStyle::Light
+      end
+    end
+
+    private def parse_css_color(value : String) : Color?
+      str = value.downcase.strip
+      case str
+      when "white"   then Color.white
+      when "black"   then Color.black
+      when "red"     then Color.red
+      when "green"   then Color.green
+      when "blue"    then Color.blue
+      when "yellow"  then Color.yellow
+      when "cyan"    then Color.cyan
+      when "magenta" then Color.magenta
+      when "default" then Color.default
+      when /^#([0-9a-f]{6})$/i
+        hex = $1
+        r = hex[0, 2].to_i(16)
+        g = hex[2, 2].to_i(16)
+        b = hex[4, 2].to_i(16)
+        Color.rgb(r, g, b)
+      when /^#([0-9a-f]{3})$/i
+        hex = $1
+        r = hex[0, 1].to_i(16) * 17
+        g = hex[1, 1].to_i(16) * 17
+        b = hex[2, 1].to_i(16) * 17
+        Color.rgb(r, g, b)
+      when /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/
+        Color.rgb($1.to_i, $2.to_i, $3.to_i)
+      else
+        nil
+      end
+    end
+
     def handle_event(event : Event) : Bool
       case event
       when MouseEvent

@@ -49,8 +49,11 @@
 ### Missing (Priority: LOW)
 - [ ] Remaining visual properties:
   - [ ] `tint`, `background-tint`
-- [ ] Border properties:
-  - [ ] `border-title-color`, `border-title-style`
+- [x] Border properties:
+  - [x] `border`, `border-style`, `border-color`
+  - [x] `border-title-color`, `title-color`
+  - [x] `border-title-style`, `title-style`
+  - [x] `title-align`
   - [ ] `border-subtitle-*`
 - [ ] Scrollbar styling:
   - [ ] `scrollbar-size`
