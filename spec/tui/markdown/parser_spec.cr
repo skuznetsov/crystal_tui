@@ -220,6 +220,52 @@ describe Tui::Markdown::Parser do
     end
   end
 
+  describe "tables" do
+    it "parses simple table" do
+      md = "| A | B |\n|---|---|\n| 1 | 2 |"
+      doc = Tui::Markdown.parse(md)
+      doc.size.should eq 1
+      doc[0].type.should eq Tui::Markdown::BlockType::Table
+      rows = doc[0].rows.not_nil!
+      rows.size.should eq 2  # header + 1 data row
+      rows[0].header?.should be_true
+      rows[0].cells.size.should eq 2
+      rows[0].cells[0].elements[0].text.should eq "A"
+      rows[1].cells[0].elements[0].text.should eq "1"
+    end
+
+    it "parses table with multiple rows" do
+      md = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |"
+      doc = Tui::Markdown.parse(md)
+      rows = doc[0].rows.not_nil!
+      rows.size.should eq 3
+      rows[2].cells[0].elements[0].text.should eq "Bob"
+    end
+
+    it "parses table alignment" do
+      md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |"
+      doc = Tui::Markdown.parse(md)
+      rows = doc[0].rows.not_nil!
+      rows[0].cells[0].align.should eq :left
+      rows[0].cells[1].align.should eq :center
+      rows[0].cells[2].align.should eq :right
+    end
+
+    it "handles table without leading pipe" do
+      md = "A | B\n---|---\n1 | 2"
+      doc = Tui::Markdown.parse(md)
+      doc[0].type.should eq Tui::Markdown::BlockType::Table
+    end
+
+    it "calculates column widths" do
+      md = "| Short | Longer text |\n|-------|-------------|\n| a | b |"
+      doc = Tui::Markdown.parse(md)
+      widths = doc[0].col_widths.not_nil!
+      widths[0].should eq 5  # "Short"
+      widths[1].should eq 11 # "Longer text"
+    end
+  end
+
   describe "complex document" do
     it "parses mixed content" do
       md = <<-MD

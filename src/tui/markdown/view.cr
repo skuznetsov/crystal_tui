@@ -18,6 +18,9 @@ module Tui
     property blockquote_bar : Style = Style.new(fg: Color.palette(240))
     property hr_style : Style = Style.new(fg: Color.palette(240))
     property strikethrough_style : Style = Style.new(fg: Color.palette(245), attrs: Attributes::Strikethrough)
+    property table_border_style : Style = Style.new(fg: Color.palette(240))
+    property table_header_style : Style = Style.new(fg: Color.cyan, attrs: Attributes::Bold)
+    property table_cell_style : Style = Style.new(fg: Color.white)
 
     # Streaming cursor
     property cursor_char : Char = '▌'
@@ -173,6 +176,9 @@ module Tui
         when .horizontal_rule?
           render_hr(width)
           add_blank_line
+        when .table?
+          render_table(block, width)
+          add_blank_line
         end
       end
 
@@ -278,6 +284,79 @@ module Tui
     private def render_hr(width : Int32) : Nil
       line = [] of Tuple(Char, Style)
       width.times { line << {'─', @hr_style} }
+      @rendered_lines << line
+    end
+
+    private def render_table(block : Markdown::Block, max_width : Int32) : Nil
+      rows = block.rows || return
+      col_widths = block.col_widths || return
+      return if rows.empty? || col_widths.empty?
+
+      # Calculate total table width
+      # │ cell │ cell │ = 1 + (col_width + 3) * cols
+      total_width = 1 + col_widths.sum { |w| w + 3 }
+
+      # Scale down if too wide
+      if total_width > max_width && col_widths.size > 0
+        scale = (max_width - 1).to_f / (total_width - 1)
+        col_widths = col_widths.map { |w| (w * scale).to_i.clamp(3, w) }
+      end
+
+      # Top border: ┌───┬───┐
+      render_table_border(col_widths, '┌', '┬', '┐', '─')
+
+      rows.each_with_index do |row, row_idx|
+        # Content row
+        line = [] of Tuple(Char, Style)
+        line << {'│', @table_border_style}
+
+        row.cells.each_with_index do |cell, col_idx|
+          col_w = col_widths[col_idx]? || 10
+          style = row.header? ? @table_header_style : @table_cell_style
+
+          # Render cell content
+          text = cell.elements.map(&.text).join
+          text = text[0, col_w] if text.size > col_w
+
+          # Apply alignment
+          padded = case cell.align
+                   when :center
+                     pad_left = (col_w - text.size) // 2
+                     pad_right = col_w - text.size - pad_left
+                     " " * pad_left + text + " " * pad_right
+                   when :right
+                     text.rjust(col_w)
+                   else
+                     text.ljust(col_w)
+                   end
+
+          line << {' ', style}
+          padded.each_char { |c| line << {c, style} }
+          line << {' ', style}
+          line << {'│', @table_border_style}
+        end
+
+        @rendered_lines << line
+
+        # After header, draw separator: ├───┼───┤
+        if row.header? && row_idx == 0
+          render_table_border(col_widths, '├', '┼', '┤', '─')
+        end
+      end
+
+      # Bottom border: └───┴───┘
+      render_table_border(col_widths, '└', '┴', '┘', '─')
+    end
+
+    private def render_table_border(col_widths : Array(Int32), left : Char, mid : Char, right : Char, fill : Char) : Nil
+      line = [] of Tuple(Char, Style)
+      line << {left, @table_border_style}
+
+      col_widths.each_with_index do |w, i|
+        (w + 2).times { line << {fill, @table_border_style} }
+        line << {(i < col_widths.size - 1 ? mid : right), @table_border_style}
+      end
+
       @rendered_lines << line
     end
 

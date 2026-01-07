@@ -13,6 +13,7 @@ module Tui
       OrderedList
       HorizontalRule
       Blockquote
+      Table
     end
 
     # Inline element types
@@ -45,6 +46,24 @@ module Tui
       end
     end
 
+    # Table cell
+    struct TableCell
+      property elements : Array(InlineElement)
+      property align : Symbol  # :left, :center, :right
+
+      def initialize(@elements : Array(InlineElement) = [] of InlineElement, @align : Symbol = :left)
+      end
+    end
+
+    # Table row
+    struct TableRow
+      property cells : Array(TableCell)
+      property? header : Bool
+
+      def initialize(@cells : Array(TableCell) = [] of TableCell, @header : Bool = false)
+      end
+    end
+
     # A block of content
     struct Block
       property type : BlockType
@@ -52,13 +71,17 @@ module Tui
       property language : String?               # For code blocks
       property code : String?                   # For code blocks (raw code)
       property items : Array(ListItem)?         # For lists
+      property rows : Array(TableRow)?          # For tables
+      property col_widths : Array(Int32)?       # For tables
 
       def initialize(
         @type : BlockType,
         @elements : Array(InlineElement) = [] of InlineElement,
         @language : String? = nil,
         @code : String? = nil,
-        @items : Array(ListItem)? = nil
+        @items : Array(ListItem)? = nil,
+        @rows : Array(TableRow)? = nil,
+        @col_widths : Array(Int32)? = nil
       )
       end
     end
@@ -142,8 +165,19 @@ module Tui
           return parse_ordered_list
         end
 
+        # Table: | col1 | col2 |
+        if line.starts_with?("|") || (line.includes?("|") && next_line_is_table_separator?)
+          return parse_table
+        end
+
         # Paragraph (default)
         parse_paragraph
+      end
+
+      private def next_line_is_table_separator? : Bool
+        next_line = @lines[@pos + 1]?
+        return false unless next_line
+        next_line =~ /^\|?[\s\-:|]+\|[\s\-:|]*$/ ? true : false
       end
 
       private def parse_code_block : Block
@@ -208,6 +242,94 @@ module Tui
         Block.new(BlockType::OrderedList, items: items)
       end
 
+      private def parse_table : Block
+        rows = [] of TableRow
+        alignments = [] of Symbol
+        col_widths = [] of Int32
+
+        # Parse header row
+        header_line = current_line.not_nil!
+        header_cells = parse_table_row(header_line)
+        rows << TableRow.new(header_cells, header: true)
+        col_widths = header_cells.map { |c| cell_text_width(c) }
+        advance
+
+        # Parse separator row (|---|---|)
+        if (sep_line = current_line) && sep_line =~ /^\|?[\s\-:|]+\|/
+          alignments = parse_alignments(sep_line)
+          advance
+        else
+          alignments = header_cells.map { :left }
+        end
+
+        # Apply alignments to header
+        rows[0] = TableRow.new(
+          header_cells.map_with_index { |cell, i|
+            TableCell.new(cell.elements, alignments[i]? || :left)
+          },
+          header: true
+        )
+
+        # Parse data rows
+        while (line = current_line)
+          break unless line.includes?("|")
+          break if line.strip.empty?
+
+          cells = parse_table_row(line)
+          # Apply alignments
+          cells = cells.map_with_index { |cell, i|
+            TableCell.new(cell.elements, alignments[i]? || :left)
+          }
+          rows << TableRow.new(cells, header: false)
+
+          # Update column widths
+          cells.each_with_index do |cell, i|
+            w = cell_text_width(cell)
+            if i < col_widths.size
+              col_widths[i] = Math.max(col_widths[i], w)
+            else
+              col_widths << w
+            end
+          end
+
+          advance
+        end
+
+        Block.new(BlockType::Table, rows: rows, col_widths: col_widths)
+      end
+
+      private def parse_table_row(line : String) : Array(TableCell)
+        # Remove leading/trailing pipes and split
+        content = line.strip
+        content = content[1..] if content.starts_with?("|")
+        content = content[..-2] if content.ends_with?("|")
+
+        content.split("|").map do |cell_text|
+          TableCell.new(parse_inline(cell_text.strip))
+        end
+      end
+
+      private def parse_alignments(sep_line : String) : Array(Symbol)
+        content = sep_line.strip
+        content = content[1..] if content.starts_with?("|")
+        content = content[..-2] if content.ends_with?("|")
+
+        content.split("|").map do |col|
+          col = col.strip
+          if col.starts_with?(":") && col.ends_with?(":")
+            :center
+          elsif col.ends_with?(":")
+            :right
+          else
+            :left
+          end
+        end
+      end
+
+      private def cell_text_width(cell : TableCell) : Int32
+        cell.elements.sum { |e| e.text.size }
+      end
+
       private def parse_paragraph : Block
         lines = [] of String
         while (line = current_line)
@@ -219,6 +341,7 @@ module Tui
           break if line =~ /^[-*+]\s/
           break if line =~ /^\d+\.\s/
           break if line =~ /^(\s*[-*_]){3,}\s*$/
+          break if line.starts_with?("|")  # Table
 
           lines << line.strip
           advance
