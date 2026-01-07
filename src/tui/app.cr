@@ -12,6 +12,11 @@ module Tui
     @input : InputParser
     @running : Bool = false
     @last_size : {Int32, Int32}
+    @stylesheet : CSS::Stylesheet?
+    @css_hot_reload : CSS::HotReload?
+
+    # CSS file path (set by subclass or via css_file class method)
+    class_property css_path : String?
 
     def initialize
       super(nil)
@@ -20,6 +25,62 @@ module Tui
       @input = InputParser.new
       @last_size = {width, height}
       Tui.current_app = self
+
+      # Load CSS if path is set
+      if css_path = self.class.css_path
+        load_css(css_path)
+      end
+    end
+
+    # Load CSS from file
+    def load_css(path : String) : Nil
+      return unless File.exists?(path)
+      @stylesheet = CSS.parse_file(path)
+      apply_styles_to_all
+    end
+
+    # Load CSS from string
+    def load_css_string(css : String) : Nil
+      @stylesheet = CSS.parse(css)
+      apply_styles_to_all
+    end
+
+    # Apply a stylesheet
+    def apply_stylesheet(stylesheet : CSS::Stylesheet) : Nil
+      @stylesheet = stylesheet
+      apply_styles_to_all
+    end
+
+    # Enable hot reload for CSS file
+    def enable_css_hot_reload(path : String? = nil, interval : Time::Span = 500.milliseconds) : Nil
+      css_path = path || self.class.css_path
+      return unless css_path
+
+      @css_hot_reload = CSS::HotReload.new(interval)
+      @css_hot_reload.not_nil!.watch_for_app(css_path, self)
+      @css_hot_reload.not_nil!.start
+    end
+
+    # Get current stylesheet
+    def stylesheet : CSS::Stylesheet?
+      @stylesheet
+    end
+
+    # Apply CSS styles to all widgets
+    private def apply_styles_to_all : Nil
+      return unless stylesheet = @stylesheet
+      apply_styles_recursive(self, stylesheet)
+    end
+
+    private def apply_styles_recursive(widget : Widget, stylesheet : CSS::Stylesheet) : Nil
+      # Get computed style for this widget
+      style = stylesheet.style_for(widget)
+      widget.apply_css_style(style) unless style.empty?
+
+      # Recurse to children
+      widget.children.each do |child|
+        apply_styles_recursive(child, stylesheet)
+      end
     end
 
     # Register an overlay to be rendered on top of everything

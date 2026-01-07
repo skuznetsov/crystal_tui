@@ -31,6 +31,7 @@ require "./tui/layout/flex"
 
 # CSS
 require "./tui/css/parser"
+require "./tui/css/hot_reload"
 
 # Unicode
 require "./tui/unicode"
@@ -66,6 +67,12 @@ require "./tui/widgets/radio_group"
 require "./tui/widgets/combo_box"
 require "./tui/widgets/draggable_window"
 require "./tui/widgets/icon_sidebar"
+require "./tui/widgets/switch"
+require "./tui/widgets/loading_indicator"
+require "./tui/widgets/header"
+require "./tui/widgets/toast"
+require "./tui/widgets/tree"
+require "./tui/widgets/rule"
 
 # Markdown
 require "./tui/markdown/parser"

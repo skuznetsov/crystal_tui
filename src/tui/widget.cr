@@ -347,5 +347,20 @@ module Tui
         @parent.try(&.app)
       end
     end
+
+    # Apply CSS style properties to this widget
+    # Override in subclasses to handle specific properties
+    def apply_css_style(style : Hash(String, CSS::Value)) : Nil
+      style.each do |property, value|
+        case property
+        when "visible"
+          @visible = value == true || value == "true"
+        when "z-index"
+          @z_index = value.as?(Int32) || 0
+        # Add more base properties as needed
+        end
+      end
+      mark_dirty!
+    end
   end
 end
