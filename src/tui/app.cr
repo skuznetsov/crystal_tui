@@ -1,5 +1,12 @@
 # Main application class
 module Tui
+  # Overlay callback for rendering popups/menus on top of everything
+  alias OverlayRenderer = Proc(Buffer, Rect, Nil)
+
+  # Module-level overlay storage (shared across all App subclasses)
+  class_getter overlays : Array(OverlayRenderer) = [] of OverlayRenderer
+  class_property current_app : App? = nil
+
   abstract class App < Widget
     @buffer : Buffer
     @input : InputParser
@@ -12,6 +19,25 @@ module Tui
       @buffer = Buffer.new(width, height)
       @input = InputParser.new
       @last_size = {width, height}
+      Tui.current_app = self
+    end
+
+    # Register an overlay to be rendered on top of everything
+    def self.add_overlay(renderer : OverlayRenderer) : Nil
+      Tui.overlays << renderer
+      Tui.current_app.try(&.mark_dirty!)
+    end
+
+    # Remove an overlay
+    def self.remove_overlay(renderer : OverlayRenderer) : Nil
+      Tui.overlays.delete(renderer)
+      Tui.current_app.try(&.mark_dirty!)
+    end
+
+    # Clear all overlays
+    def self.clear_overlays : Nil
+      Tui.overlays.clear
+      Tui.current_app.try(&.mark_dirty!)
     end
 
     # Override to create root widget tree
@@ -157,6 +183,12 @@ module Tui
         if child_clip = clip.intersect(child.render_rect)
           child.render(@buffer, child_clip)
         end
+      end
+
+      # Render overlays LAST (on top of everything, with full screen clip)
+      full_clip = @rect
+      Tui.overlays.each do |overlay|
+        overlay.call(@buffer, full_clip)
       end
 
       # Flush to terminal

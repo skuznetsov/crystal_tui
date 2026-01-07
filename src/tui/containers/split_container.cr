@@ -305,6 +305,11 @@ module Tui
     def handle_event(event : Event) : Bool
       return false if event.stopped?
 
+      # Ensure layout is calculated for accurate hit testing
+      layout_areas
+      @first.try { |c| c.rect = @first_area }
+      @second.try { |c| c.rect = @second_area }
+
       case event
       when MouseEvent
         splitter_rect = splitter_hit_rect

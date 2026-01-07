@@ -142,13 +142,15 @@ module Tui
         buffer.set(@rect.x, y + 1, '▌', @active_indicator_style) if clip.contains?(@rect.x, y + 1)
       end
 
-      # Draw icon centered
-      icon_x = @rect.x + (@width - 2) // 2  # Center in available width (minus border)
+      # Calculate icon width and center position
+      icon_width = Unicode.char_width(item.icon)
+      content_width = @width - (@show_border ? 1 : 0)  # Available width (minus border)
+      icon_x = @rect.x + (content_width - icon_width) // 2  # Center icon
       icon_y = y + 1
 
       # Background for active item
       if is_active
-        (@width - 1).times do |col|
+        content_width.times do |col|
           x = @rect.x + col
           [y, y + 1, y + 2].each do |row|
             buffer.set(x, row, ' ', @active_style) if clip.contains?(x, row) && row < @rect.bottom
@@ -156,7 +158,8 @@ module Tui
         end
       end
 
-      buffer.set(icon_x, icon_y, item.icon, style) if clip.contains?(icon_x, icon_y)
+      # Draw icon using set_wide for proper wide char handling
+      buffer.set_wide(icon_x, icon_y, item.icon, style) if clip.contains?(icon_x, icon_y)
 
       # Draw badge if present
       if badge = item.badge

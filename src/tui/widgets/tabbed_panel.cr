@@ -26,6 +26,7 @@ module Tui
     @show_tooltip : Bool = false
     @overflow_open : Bool = false
     @overflow_selected : Int32 = 0
+    @overflow_overlay : OverlayRenderer? = nil
 
     # Style
     property tab_bg : Color = Color.cyan
@@ -158,13 +159,13 @@ module Tui
       # Calculate content area (excluding tab bars)
       content_rect = calculate_content_rect
 
-      # Draw tab bars on each position
+      # Draw tab bars on each position (without overflow menu yet)
       @positions.each do |pos|
         case pos
         when .top?
-          draw_horizontal_tabs(buffer, clip, top: true)
+          draw_horizontal_tabs(buffer, clip, top: true, draw_overflow: false)
         when .bottom?
-          draw_horizontal_tabs(buffer, clip, top: false)
+          draw_horizontal_tabs(buffer, clip, top: false, draw_overflow: false)
         when .left?
           draw_vertical_tabs(buffer, clip, left: true)
         when .right?
@@ -187,6 +188,8 @@ module Tui
           content.render(buffer, clip)
         end
       end
+
+      # NOTE: Overflow menu is now rendered via App overlay system (not clipped)
 
       # Draw tooltip if hovering
       if @show_tooltip && @hovered_tab >= 0 && @hovered_tab < @tabs.size
@@ -226,7 +229,7 @@ module Tui
       @vertical_tab_height.clamp(3, 10)
     end
 
-    private def draw_horizontal_tabs(buffer : Buffer, clip : Rect, top : Bool) : Nil
+    private def draw_horizontal_tabs(buffer : Buffer, clip : Rect, top : Bool, draw_overflow : Bool = true) : Nil
       y = top ? @rect.y : @rect.bottom - 1
       style = Style.new(fg: @tab_fg, bg: @tab_bg)
       active_style = Style.new(fg: @active_tab_fg, bg: @active_tab_bg)
@@ -273,8 +276,8 @@ module Tui
           buffer.set(chevron_x + i, y, char, chevron_style) if clip.contains?(chevron_x + i, y)
         end
 
-        # Draw overflow dropdown if open
-        if @overflow_open
+        # Draw overflow dropdown if open (only if draw_overflow is true)
+        if draw_overflow && @overflow_open
           draw_overflow_menu(buffer, clip, chevron_x, y, top)
         end
       end
@@ -292,20 +295,74 @@ module Tui
       @tabs.size
     end
 
+    # Draw overflow menu only (called after content to appear on top)
+    private def draw_overflow_menu_only(buffer : Buffer, clip : Rect, top : Bool) : Nil
+      available_width = @rect.width - 4
+      visible_tabs = calculate_visible_tabs(available_width)
+      return if visible_tabs >= @tabs.size  # No overflow
+
+      hidden_count = @tabs.size - visible_tabs
+      chevron = " #{@chevron_char}#{hidden_count} "
+      chevron_x = @rect.right - chevron.size
+      bar_y = top ? @rect.y : @rect.bottom - 1
+
+      draw_overflow_menu(buffer, clip, chevron_x, bar_y, top)
+    end
+
+    # Draw overflow menu as overlay (called from App overlay system with full clip)
+    private def draw_overflow_menu_overlay(buffer : Buffer, clip : Rect) : Nil
+      return unless @overflow_open
+      return if @rect.empty?
+
+      available_width = @rect.width - 4
+      visible_tabs = calculate_visible_tabs(available_width)
+      return if visible_tabs >= @tabs.size  # No overflow
+
+      hidden_count = @tabs.size - visible_tabs
+      chevron = " #{@chevron_char}#{hidden_count} "
+      chevron_x = @rect.right - chevron.size
+
+      # Determine if tabs are at top or bottom
+      top = @positions.includes?(TabPosition::Top)
+      bar_y = top ? @rect.y : @rect.bottom - 1
+
+      draw_overflow_menu(buffer, clip, chevron_x, bar_y, top)
+    end
+
     private def draw_overflow_menu(buffer : Buffer, clip : Rect, chevron_x : Int32, bar_y : Int32, top : Bool) : Nil
-      menu_width = @tabs.max_of(&.label.size) + 4
+      # Width: borders (2) + prefix "● " (2 display width) + label + padding (1)
+      max_label_width = @tabs.max_of { |t| Unicode.display_width(t.label) }
+      menu_width = max_label_width + 5  # 2 borders + 2 prefix + 1 padding
       menu_height = @tabs.size
-      menu_x = (chevron_x - menu_width + 4).clamp(@rect.x, @rect.right - menu_width)
+      # Position menu left of chevron, but ensure it fits within clip (full screen) bounds
+      menu_x = chevron_x - menu_width + 4
+      menu_x = menu_x.clamp(clip.x, clip.right - menu_width)
       menu_y = top ? bar_y + 1 : bar_y - menu_height
 
       style = Style.new(fg: @overflow_fg, bg: @overflow_bg)
       active_style = Style.new(fg: @overflow_active_fg, bg: @overflow_active_bg)
-      border_style_val = Style.new(fg: @border_color, bg: @overflow_bg)
+      # Dark gray border for visibility on cyan background
+      border_style_val = Style.new(fg: Color.palette(240), bg: @overflow_bg)
       border = Panel::BORDERS[@border_style]
 
-      # Draw menu background
+      # Clear menu background first (prevents stray pixels)
+      total_height = menu_height + 2  # items + top/bottom borders
+      total_height.times do |row|
+        menu_width.times do |col|
+          buffer.set(menu_x + col, menu_y + row, ' ', style) if clip.contains?(menu_x + col, menu_y + row)
+        end
+      end
+
+      # Draw top border
+      buffer.set(menu_x, menu_y, border[:tl], border_style_val) if clip.contains?(menu_x, menu_y)
+      (1...menu_width - 1).each do |i|
+        buffer.set(menu_x + i, menu_y, border[:h], border_style_val) if clip.contains?(menu_x + i, menu_y)
+      end
+      buffer.set(menu_x + menu_width - 1, menu_y, border[:tr], border_style_val) if clip.contains?(menu_x + menu_width - 1, menu_y)
+
+      # Draw menu items (shifted down by 1 for top border)
       @tabs.each_with_index do |tab, i|
-        item_y = menu_y + i
+        item_y = menu_y + 1 + i
         is_active = i == @overflow_selected
         is_current = i == @active_tab
         item_style = is_active ? active_style : style
@@ -313,19 +370,28 @@ module Tui
         # Left border
         buffer.set(menu_x, item_y, border[:v], border_style_val) if clip.contains?(menu_x, item_y)
 
-        # Content
+        # Content - use display width aware rendering
         label = is_current ? "● #{tab.label}" : "  #{tab.label}"
-        label = label.ljust(menu_width - 2)
-        label.each_char_with_index do |char, ci|
-          buffer.set(menu_x + 1 + ci, item_y, char, item_style) if clip.contains?(menu_x + 1 + ci, item_y)
+        content_width = menu_width - 2  # space between borders
+        x_offset = 0
+        label.each_char do |char|
+          break if x_offset >= content_width
+          char_width = Unicode.display_width(char.to_s)
+          buffer.set(menu_x + 1 + x_offset, item_y, char, item_style) if clip.contains?(menu_x + 1 + x_offset, item_y)
+          x_offset += char_width
+        end
+        # Fill remaining space with background
+        while x_offset < content_width
+          buffer.set(menu_x + 1 + x_offset, item_y, ' ', item_style) if clip.contains?(menu_x + 1 + x_offset, item_y)
+          x_offset += 1
         end
 
         # Right border
         buffer.set(menu_x + menu_width - 1, item_y, border[:v], border_style_val) if clip.contains?(menu_x + menu_width - 1, item_y)
       end
 
-      # Draw bottom border
-      bottom_y = menu_y + menu_height
+      # Draw bottom border (shifted down by 1 for top border)
+      bottom_y = menu_y + 1 + menu_height
       buffer.set(menu_x, bottom_y, border[:bl], border_style_val) if clip.contains?(menu_x, bottom_y)
       (1...menu_width - 1).each do |i|
         buffer.set(menu_x + i, bottom_y, border[:h], border_style_val) if clip.contains?(menu_x + i, bottom_y)
@@ -336,11 +402,30 @@ module Tui
     def toggle_overflow : Nil
       @overflow_open = !@overflow_open
       @overflow_selected = @active_tab if @overflow_open
+
+      if @overflow_open
+        # Register overlay for menu rendering
+        @overflow_overlay = ->(buffer : Buffer, clip : Rect) {
+          draw_overflow_menu_overlay(buffer, clip)
+        }
+        App.add_overlay(@overflow_overlay.not_nil!)
+      else
+        # Remove overlay
+        if overlay = @overflow_overlay
+          App.remove_overlay(overlay)
+          @overflow_overlay = nil
+        end
+      end
       mark_dirty!
     end
 
     def close_overflow : Nil
+      return unless @overflow_open
       @overflow_open = false
+      if overlay = @overflow_overlay
+        App.remove_overlay(overlay)
+        @overflow_overlay = nil
+      end
       mark_dirty!
     end
 
@@ -428,10 +513,12 @@ module Tui
 
     def handle_event(event : Event) : Bool
       return false if event.stopped?
-      return false unless focused?
 
+      # Mouse events should work regardless of focus
+      # Key events require focus
       case event
       when KeyEvent
+        return false unless focused?
         # Handle overflow menu if open
         if @overflow_open
           case event.key
@@ -575,10 +662,14 @@ module Tui
 
       # Check if clicking on chevron area (right side of tab bar)
       bar_y = @positions.includes?(TabPosition::Top) ? @rect.y : @rect.bottom - 1
+
+      hidden_count = @tabs.size - visible
+      chevron = " #{@chevron_char}#{hidden_count} "
+      chevron_start = @rect.right - chevron.size
+
       return false unless my == bar_y
 
-      chevron_width = 4 + (@tabs.size - visible).to_s.size
-      mx >= @rect.right - chevron_width
+      mx >= chevron_start
     end
 
     private def overflow_menu_item_at(mx : Int32, my : Int32) : Int32?
@@ -586,9 +677,11 @@ module Tui
 
       # Calculate menu position (same as in draw)
       visible = calculate_visible_tabs(@rect.width - 4)
-      chevron_x = @rect.right - 4 - (@tabs.size - visible).to_s.size
+      hidden_count = @tabs.size - visible
+      chevron = " #{@chevron_char}#{hidden_count} "
+      chevron_x = @rect.right - chevron.size
       menu_width = @tabs.max_of(&.label.size) + 4
-      menu_x = (chevron_x - menu_width + 4).clamp(@rect.x, @rect.right - menu_width)
+      menu_x = (chevron_x - menu_width + chevron.size).clamp(@rect.x, @rect.right - menu_width)
 
       top = @positions.includes?(TabPosition::Top)
       bar_y = top ? @rect.y : @rect.bottom - 1

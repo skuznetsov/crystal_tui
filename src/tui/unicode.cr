@@ -108,8 +108,8 @@ module Tui
 
       # Common emoji ranges (simplified - many emoji are 2 wide)
       return true if codepoint >= 0x1F300 && codepoint <= 0x1F9FF  # Misc Symbols, Emoticons, etc.
-      return true if codepoint >= 0x2600 && codepoint <= 0x26FF   # Misc Symbols
-      return true if codepoint >= 0x2700 && codepoint <= 0x27BF   # Dingbats
+      # Note: 0x2600-0x26FF (Misc Symbols) and 0x2700-0x27BF (Dingbats) are ambiguous width
+      # Many terminals render them as 1-wide, so we don't include them here
 
       false
     end

@@ -187,8 +187,10 @@ module Tui
   struct Cell
     property char : Char
     property style : Style
+    property? wide : Bool          # True if this is a wide (2-column) character
+    property? continuation : Bool  # True if this is the right half of a wide char
 
-    def initialize(@char : Char = ' ', @style : Style = Style.default)
+    def initialize(@char : Char = ' ', @style : Style = Style.default, @wide : Bool = false, @continuation : Bool = false)
     end
 
     def self.empty : Cell
@@ -199,8 +201,13 @@ module Tui
       new(' ', Style.new(bg: Color.transparent))
     end
 
+    # Continuation cell (right half of wide char)
+    def self.continuation(style : Style = Style.default) : Cell
+      new(' ', style, wide: false, continuation: true)
+    end
+
     def ==(other : Cell) : Bool
-      @char == other.char && @style == other.style
+      @char == other.char && @style == other.style && @wide == other.wide? && @continuation == other.continuation?
     end
 
     def transparent_bg? : Bool

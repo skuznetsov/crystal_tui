@@ -31,6 +31,21 @@ module Tui
       set(x, y, Cell.new(char, style))
     end
 
+    # Set a wide character (handles 2-cell characters like emoji/CJK)
+    def set_wide(x : Int32, y : Int32, char : Char, style : Style = Style.default) : Int32
+      width = Unicode.char_width(char)
+      if width == 2
+        # Wide character: set main cell and continuation
+        set(x, y, Cell.new(char, style, wide: true, continuation: false))
+        set(x + 1, y, Cell.continuation(style))
+        2
+      else
+        # Normal character
+        set(x, y, Cell.new(char, style))
+        width
+      end
+    end
+
     # Get a cell at position
     def get(x : Int32, y : Int32) : Cell
       return Cell.empty unless in_bounds?(x, y)
@@ -51,11 +66,14 @@ module Tui
       end
     end
 
-    # Draw a string at position
-    def draw_string(x : Int32, y : Int32, text : String, style : Style = Style.default) : Nil
-      text.each_char_with_index do |char, i|
-        set(x + i, y, char, style)
+    # Draw a string at position (with Unicode width support)
+    def draw_string(x : Int32, y : Int32, text : String, style : Style = Style.default) : Int32
+      current_x = x
+      text.each_char do |char|
+        width = set_wide(current_x, y, char, style)
+        current_x += width
       end
+      current_x - x  # Return total width drawn
     end
 
     # Draw a horizontal line
@@ -166,8 +184,16 @@ module Tui
           # Skip if unchanged from previous frame
           next if @prev_cells[idx] == cell
 
+          # Skip continuation cells (terminal fills these automatically)
+          if cell.continuation?
+            @prev_cells[idx] = cell
+            next
+          end
+
           # Move cursor if not sequential
-          if y != last_y || x != last_x + 1
+          # For wide chars, cursor moves 2 positions
+          expected_x = last_x + (last_y == y && last_x >= 0 && @cells[last_y * @width + last_x]?.try(&.wide?) ? 2 : 1)
+          if y != last_y || x != expected_x
             s << ANSI.move(x, y)
           end
 

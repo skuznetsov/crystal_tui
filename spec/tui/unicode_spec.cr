@@ -42,7 +42,15 @@ describe Tui::Unicode do
     it "returns 2 for common emoji" do
       Tui::Unicode.char_width('😀').should eq 2
       Tui::Unicode.char_width('🎉').should eq 2
-      Tui::Unicode.char_width('❤').should eq 2
+      Tui::Unicode.char_width('💬').should eq 2  # Speech balloon
+      Tui::Unicode.char_width('📁').should eq 2  # Folder
+    end
+
+    it "returns 1 for ambiguous-width symbols" do
+      # These are in 0x2600-0x27BF range which renders as 1-wide in most terminals
+      Tui::Unicode.char_width('⚙').should eq 1   # Gear
+      Tui::Unicode.char_width('❤').should eq 1   # Heart
+      Tui::Unicode.char_width('☀').should eq 1   # Sun
     end
 
     it "returns 0 for combining characters" do

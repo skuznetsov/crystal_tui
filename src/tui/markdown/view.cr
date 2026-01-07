@@ -250,14 +250,19 @@ module Tui
         line << {'│', @code_block_border}
         line << {' ', @code_block_style}
 
+        # Track display width (not character count) for proper alignment
+        display_width = 2  # │ + space
         code_line.each_char do |c|
-          break if line.size >= width - 2
+          char_w = Unicode.char_width(c)
+          break if display_width + char_w > width - 2  # Leave room for space + │
           line << {c, @code_block_style}
+          display_width += char_w
         end
 
-        # Pad to width
-        while line.size < width - 1
+        # Pad to width using display width
+        while display_width < width - 1
           line << {' ', @code_block_style}
+          display_width += 1
         end
         line << {'│', @code_block_border}
         @rendered_lines << line

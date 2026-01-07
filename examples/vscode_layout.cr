@@ -108,8 +108,10 @@ class VSCodeDemo < Tui::App
   def initialize
     super
 
-    # Create sidebar
+    # Create sidebar with emoji icons (Unicode support handles 2-wide chars)
     @sidebar = Tui::IconSidebar.new("sidebar")
+    @sidebar.width = 5  # Width for emoji + padding
+    @sidebar.show_border = false  # SplitContainer draws the splitter
     @sidebar.add_item("chats", '💬', "Chats", "Chat sessions")
     @sidebar.add_item("files", '📁', "Files", "File explorer")
     @sidebar.add_item("settings", '⚙', "Settings", "Configuration")
@@ -139,10 +141,11 @@ class VSCodeDemo < Tui::App
     # Create split container: sidebar | tabs
     @split = Tui::SplitContainer.new(
       direction: Tui::SplitContainer::Direction::Horizontal,
-      ratio: 0.05,  # Small sidebar
+      ratio: 0.0,  # Start at minimum
       id: "main_split"
     )
-    @split.min_first = 4
+    @split.show_border = false  # No outer border
+    @split.min_first = @sidebar.width  # Match sidebar width exactly
     @split.first = @sidebar
     @split.second = @tabs
   end
