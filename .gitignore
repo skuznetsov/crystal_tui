@@ -2,6 +2,7 @@
 /bin/
 /lib/
 /.shards/
+/docs/
 
 # Editor/IDE
 .idea/

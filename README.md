@@ -207,8 +207,9 @@ crystal spec
 # Build all examples
 crystal build examples/*.cr -o bin/
 
-# Generate API docs
+# Generate API docs (outputs to docs/)
 crystal docs
+# Then open docs/index.html in browser
 ```
 
 ## License
