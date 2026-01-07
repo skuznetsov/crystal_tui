@@ -61,7 +61,7 @@
 
 ## 2. Widgets
 
-### Current Widgets (36)
+### Current Widgets (38)
 - [x] Panel - container with border/title
 - [x] Button - clickable button
 - [x] Label - text display
@@ -105,11 +105,11 @@
 - [x] **Slider** - Range slider with keyboard/mouse
 - [x] **MaskedInput** - Input with format mask (phone, date, etc.)
 - [x] **Digits** - Large ASCII art number display
+- [x] **Calendar** - Date picker with month navigation
+- [x] **ColorPicker** - 16/256 color palette selection
 - [ ] **Placeholder** - Dev placeholder widget
 - [ ] **Pretty** - Pretty-print data structures
-- [ ] **Calendar** - Date picker
 - [ ] **TimePicker** - Time selection
-- [ ] **ColorPicker** - Color selection
 
 ---
 

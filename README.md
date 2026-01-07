@@ -66,6 +66,8 @@ HelloWorld.new.run
 - `ComboBox` - Dropdown select
 - `Switch` - iOS-style toggle
 - `Slider` - Range slider
+- `Calendar` - Date picker
+- `ColorPicker` - Color selection (16/256 colors)
 
 ### Display
 - `Label` - Text display
