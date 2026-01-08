@@ -58,6 +58,11 @@ module Tui
     property title_decor : TitleStyle = TitleStyle::Brackets  # Default to brackets
     property title_truncate : TitleTruncate = TitleTruncate::End
 
+    # Focus highlighting (when widget is focused)
+    property focus_border_color : Color? = nil    # nil = no change
+    property focus_title_color : Color? = nil     # nil = no change
+    property focus_highlight : Bool = true        # Enable/disable focus highlighting
+
     # Legacy uniform padding setter (use inherited BoxModel padding property)
     def padding=(value : Int32) : Nil
       @padding = BoxModel.all(value)
@@ -142,8 +147,23 @@ module Tui
       end
 
       border = BORDERS[@border_style]
-      style = Style.new(fg: @border_color)
-      title_style = Style.new(fg: @title_color, attrs: Attributes::Bold)
+
+      # Use focus colors if focused and highlighting enabled
+      actual_border_color = if @focus_highlight && focused? && @focus_border_color
+                              @focus_border_color.not_nil!
+                            else
+                              @border_color
+                            end
+      actual_title_color = if @focus_highlight && focused? && @focus_title_color
+                             @focus_title_color.not_nil!
+                           elsif @focus_highlight && focused? && @focus_border_color
+                             @focus_border_color.not_nil!  # Use border color for title if only border color set
+                           else
+                             @title_color
+                           end
+
+      style = Style.new(fg: actual_border_color)
+      title_style = Style.new(fg: actual_title_color, attrs: Attributes::Bold)
 
       has_top = @show_borders.top?
       has_bottom = @show_borders.bottom?

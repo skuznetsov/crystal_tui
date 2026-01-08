@@ -19,12 +19,22 @@ module Tui
     property second_title : String = ""
     property title_color : Color = Color.yellow
 
+    # Focus highlighting
+    property focus_border_color : Color? = nil
+    property focus_title_color : Color? = nil
+    property focus_highlight : Bool = true
+
     @first : Widget?
     @second : Widget?
     @first_area : Rect = Rect.zero   # Content area for first child
     @second_area : Rect = Rect.zero  # Content area for second child
     @splitter_pos : Int32 = 0        # x or y position of splitter line
     @dragging : Bool = false
+
+    # Focus state (computed during render)
+    @focused_section : Symbol? = nil
+    @first_focused : Bool = false
+    @second_focused : Bool = false
 
     # Callbacks
     @on_resize : Proc(Float64, Nil)?
@@ -83,6 +93,11 @@ module Tui
       @first.try { |c| c.rect = @first_area }
       @second.try { |c| c.rect = @second_area }
 
+      # Determine focus state for highlighting
+      @focused_section = focused_section
+      @first_focused = @focused_section == :first
+      @second_focused = @focused_section == :second
+
       style = Style.new(fg: @border_color)
 
       if @show_border
@@ -135,42 +150,84 @@ module Tui
     private def draw_outer_border(buffer : Buffer, clip : Rect, style : Style) : Nil
       x, y, w, h = @rect.x, @rect.y, @rect.width, @rect.height
 
-      # Corners
-      buffer.set(x, y, '┌', style) if clip.contains?(x, y)
+      # Determine if we need to highlight borders (when focused but no title)
+      first_border_style = if @first_focused && @first_title.empty? && @focus_border_color
+                             Style.new(fg: @focus_border_color.not_nil!)
+                           else
+                             style
+                           end
+
+      # Corners - highlight based on which section is focused
+      tl_style = @first_focused && @focus_border_color ? first_border_style : style
+      buffer.set(x, y, '┌', tl_style) if clip.contains?(x, y)
       buffer.set(x + w - 1, y, '┐', style) if clip.contains?(x + w - 1, y)
-      buffer.set(x, y + h - 1, '└', style) if clip.contains?(x, y + h - 1)
+      buffer.set(x, y + h - 1, '└', tl_style) if clip.contains?(x, y + h - 1)
       buffer.set(x + w - 1, y + h - 1, '┘', style) if clip.contains?(x + w - 1, y + h - 1)
 
       # Top edge (with first title if horizontal, or first_title if vertical)
       title = @direction.horizontal? ? @first_title : @first_title
-      draw_horizontal_edge(buffer, clip, x + 1, y, w - 2, title, style)
+      draw_horizontal_edge(buffer, clip, x + 1, y, w - 2, title, style, @first_focused)
 
       # Bottom edge (with second title for vertical splits shown at splitter)
-      draw_horizontal_edge(buffer, clip, x + 1, y + h - 1, w - 2, "", style)
+      draw_horizontal_edge(buffer, clip, x + 1, y + h - 1, w - 2, "", style, false)
 
-      # Left edge
+      # Left edge - highlight if first section focused (for horizontal splits with no title)
+      left_style = if @direction.horizontal? && @first_focused && @first_title.empty? && @focus_border_color
+                     Style.new(fg: @focus_border_color.not_nil!)
+                   else
+                     style
+                   end
       (1...h - 1).each do |i|
-        buffer.set(x, y + i, '│', style) if clip.contains?(x, y + i)
+        buffer.set(x, y + i, '│', left_style) if clip.contains?(x, y + i)
       end
 
       # Right edge (with junction for nested horizontal splitter)
+      # Highlight if second section focused and no second_title (for horizontal splits)
+      right_style = if @direction.horizontal? && @second_focused && @second_title.empty? && @focus_border_color
+                      Style.new(fg: @focus_border_color.not_nil!)
+                    else
+                      style
+                    end
       nested_y = find_nested_horizontal_splitter_y
       (1...h - 1).each do |i|
         py = y + i
         next unless clip.contains?(x + w - 1, py)
         char = (nested_y == py) ? '┤' : '│'
-        buffer.set(x + w - 1, py, char, style)
+        buffer.set(x + w - 1, py, char, right_style)
       end
     end
 
-    private def draw_horizontal_edge(buffer : Buffer, clip : Rect, x : Int32, y : Int32, width : Int32, title : String, style : Style) : Nil
-      title_style = Style.new(fg: @title_color, attrs: Attributes::Bold)
+    private def draw_horizontal_edge(buffer : Buffer, clip : Rect, x : Int32, y : Int32, width : Int32,
+                                     title : String, style : Style, focused : Bool = false) : Nil
+      # Use focus color for title if section is focused
+      actual_title_color = if focused && @focus_title_color
+                             @focus_title_color.not_nil!
+                           elsif focused && @focus_border_color
+                             @focus_border_color.not_nil!
+                           else
+                             @title_color
+                           end
+      # Add dark gray background when focused to make it more visible
+      title_style = if focused
+                      Style.new(fg: actual_title_color, bg: Color.rgb(50, 50, 50), attrs: Attributes::Bold)
+                    else
+                      Style.new(fg: actual_title_color, attrs: Attributes::Bold)
+                    end
+
+
+      # Also highlight border if focused
+      actual_style = if focused && @focus_border_color
+                       Style.new(fg: @focus_border_color.not_nil!)
+                     else
+                       style
+                     end
 
       if title.empty?
         width.times { |i| buffer.set(x + i, y, '─', style) if clip.contains?(x + i, y) }
       else
         # Draw: ─┤ Title ├───
-        decorated = "┤ #{title} ├"
+        display_title = title
+        decorated = "┤ #{display_title} ├"
         title_start = 1
         title_end = title_start + decorated.size
 
@@ -180,7 +237,7 @@ module Tui
 
           if i >= title_start && i < title_end
             char = decorated[i - title_start]
-            char_style = (char == '┤' || char == '├') ? style : title_style
+            char_style = (char == '┤' || char == '├') ? actual_style : title_style
             buffer.set(px, y, char, char_style)
           else
             buffer.set(px, y, '─', style)
@@ -191,8 +248,38 @@ module Tui
 
     private def draw_splitter(buffer : Buffer, clip : Rect) : Nil
       style = Style.new(fg: @dragging ? @splitter_drag_color : @splitter_color)
-      title_style = Style.new(fg: @title_color, attrs: Attributes::Bold)
       border = @show_border ? 1 : 0
+
+      # Calculate focus-aware title style for second section
+      second_title_color = if @second_focused && @focus_title_color
+                             @focus_title_color.not_nil!
+                           elsif @second_focused && @focus_border_color
+                             @focus_border_color.not_nil!
+                           else
+                             @title_color
+                           end
+      # Add dark gray background when focused
+      title_style = if @second_focused
+                      Style.new(fg: second_title_color, bg: Color.rgb(50, 50, 50), attrs: Attributes::Bold)
+                    else
+                      Style.new(fg: second_title_color, attrs: Attributes::Bold)
+                    end
+
+      second_border_style = if @second_focused && @focus_border_color
+                              Style.new(fg: @focus_border_color.not_nil!)
+                            else
+                              style
+                            end
+
+      # Highlight splitter line if focused section has no title
+      first_no_title_focused = @first_focused && @first_title.empty? && @focus_border_color
+      second_no_title_focused = @second_focused && @second_title.empty? && @focus_border_color
+      splitter_highlight = first_no_title_focused || second_no_title_focused
+      splitter_style = if splitter_highlight
+                         Style.new(fg: @focus_border_color.not_nil!)
+                       else
+                         style
+                       end
 
       case @direction
       when .horizontal?
@@ -203,8 +290,8 @@ module Tui
 
         # Top junction with border
         if @show_border
-          buffer.set(x, @rect.y, '┬', style) if clip.contains?(x, @rect.y)
-          buffer.set(x, @rect.y + @rect.height - 1, '┴', style) if clip.contains?(x, @rect.y + @rect.height - 1)
+          buffer.set(x, @rect.y, '┬', splitter_style) if clip.contains?(x, @rect.y)
+          buffer.set(x, @rect.y + @rect.height - 1, '┴', splitter_style) if clip.contains?(x, @rect.y + @rect.height - 1)
         end
 
         # Splitter line + junction with nested horizontal splitters
@@ -212,12 +299,13 @@ module Tui
         (y_start...y_end).each do |py|
           next unless clip.contains?(x, py)
           char = nested_y == py ? '├' : '│'
-          buffer.set(x, py, char, style)
+          buffer.set(x, py, char, splitter_style)
         end
 
         # Draw second_title on top edge after splitter
         if !@second_title.empty? && @show_border
-          draw_title_on_edge(buffer, clip, @splitter_pos + 1, @rect.y, @rect.x + @rect.width - 1 - @splitter_pos - 1, @second_title, style, title_style)
+          display_title = @second_title
+          draw_title_on_edge(buffer, clip, @splitter_pos + 1, @rect.y, @rect.x + @rect.width - 1 - @splitter_pos - 1, display_title, second_border_style, title_style)
         end
 
       when .vertical?
@@ -228,18 +316,19 @@ module Tui
 
         # Left/right junctions with border
         if @show_border
-          buffer.set(@rect.x, y, '├', style) if clip.contains?(@rect.x, y)
-          buffer.set(@rect.x + @rect.width - 1, y, '┤', style) if clip.contains?(@rect.x + @rect.width - 1, y)
+          buffer.set(@rect.x, y, '├', splitter_style) if clip.contains?(@rect.x, y)
+          buffer.set(@rect.x + @rect.width - 1, y, '┤', splitter_style) if clip.contains?(@rect.x + @rect.width - 1, y)
         end
 
         # Splitter line with second_title
         if @second_title.empty?
           (x_start...x_end).each do |px|
-            buffer.set(px, y, '─', style) if clip.contains?(px, y)
+            buffer.set(px, y, '─', splitter_style) if clip.contains?(px, y)
           end
         else
           # Draw: ─┤ Title ├───
-          decorated = "┤ #{@second_title} ├"
+          display_title = @second_title
+          decorated = "┤ #{display_title} ├"
           title_start = 1
           title_end = title_start + decorated.size
           line_width = x_end - x_start
@@ -250,7 +339,7 @@ module Tui
 
             if i >= title_start && i < title_end
               char = decorated[i - title_start]
-              char_style = (char == '┤' || char == '├') ? style : title_style
+              char_style = (char == '┤' || char == '├') ? second_border_style : title_style
               buffer.set(px, y, char, char_style)
             else
               buffer.set(px, y, '─', style)
@@ -390,6 +479,69 @@ module Tui
         return if total <= 0
         pos = my - @rect.y - border
         @ratio = (pos.to_f / total).clamp(@min_first.to_f / total, 1.0 - @min_second.to_f / total)
+      end
+    end
+
+    # Check if the focused widget is a descendant of given widget
+    private def is_ancestor_of_focused?(widget : Widget?) : Bool
+      return false unless widget
+      focused = Widget.focused_widget
+      return false unless focused
+
+      # Walk up from focused widget to see if we hit 'widget'
+      current = focused
+      while current
+        return true if current == widget
+        current = current.parent
+      end
+      false
+    end
+
+    # Get the section (first/second) that has focus, or nil
+    # If a nested SplitContainer has a title for the focused section, let it handle highlighting
+    # Otherwise, highlight here
+    private def focused_section : Symbol?
+      return nil unless @focus_highlight && @focus_border_color
+
+      first_has_focus = is_ancestor_of_focused?(@first)
+      second_has_focus = is_ancestor_of_focused?(@second)
+
+      if first_has_focus
+        # Check if nested SplitContainer will show its own title
+        if nested_shows_focus_title?(@first)
+          nil  # Let nested container handle it
+        else
+          :first
+        end
+      elsif second_has_focus
+        if nested_shows_focus_title?(@second)
+          nil
+        else
+          :second
+        end
+      else
+        nil
+      end
+    end
+
+    # Check if a nested SplitContainer will display a title for the focused widget
+    private def nested_shows_focus_title?(widget : Widget?) : Bool
+      return false unless widget
+      return false unless widget.is_a?(SplitContainer)
+
+      split = widget.as(SplitContainer)
+      # Check if nested split has focus highlighting enabled
+      return false unless split.focus_highlight && split.focus_border_color
+
+      # Check which section has focus and if it has a title
+      if is_ancestor_of_focused?(split.first)
+        # First section has focus - check if it has a title OR if deeper nested shows title
+        !split.first_title.empty? || nested_shows_focus_title?(split.first)
+      elsif is_ancestor_of_focused?(split.second)
+        # Second section has focus - check if it has a title OR if deeper nested shows title
+        !split.second_title.empty? || nested_shows_focus_title?(split.second)
+      else
+        false
       end
     end
   end

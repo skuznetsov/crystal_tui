@@ -16,6 +16,13 @@ module Tui
     property label_color : Color = Color.black
     property label_bg : Color = Color.white
 
+    # Callback for when a binding is clicked
+    @on_click : Proc(Binding, Nil)?
+
+    def on_click(&block : Binding -> Nil) : Nil
+      @on_click = block
+    end
+
     def initialize(id : String? = nil)
       super(id)
     end
@@ -93,7 +100,23 @@ module Tui
     end
 
     def handle_event(event : Event) : Bool
-      false  # Footer doesn't handle events, app does
+      case event
+      when MouseEvent
+        if event.action.press? && event.button.left? && event.in_rect?(@rect)
+          # Calculate which binding was clicked
+          width_per_key = @rect.width // 10
+          clicked_x = event.x - @rect.x
+          key_index = clicked_x // width_per_key
+          key_num = key_index + 1
+
+          if binding = @bindings.find { |b| b.key == key_num }
+            @on_click.try &.call(binding)
+            event.stop!
+            return true
+          end
+        end
+      end
+      false
     end
   end
 end

@@ -51,6 +51,30 @@ module Tui
       @focusable = true
     end
 
+    # Override render_rect to include dropdown area when open
+    def render_rect : Rect
+      return @rect unless @dropdown_open && @active_menu >= 0 && @active_menu < @menus.size
+
+      menu = @menus[@active_menu]
+      return @rect if menu.items.empty?
+
+      dropdown_height = menu.items.size + 2  # +1 for bottom border, +1 for shadow
+      dropdown_width = menu.items.max_of { |item| item.separator ? 1 : item.label.size } + 6  # +4 for padding, +2 for shadow
+
+      # Expand rect to include dropdown
+      Rect.new(
+        @rect.x,
+        @rect.y,
+        [@rect.width, dropdown_width + @rect.x].max,
+        @rect.height + dropdown_height
+      )
+    end
+
+    # High z_index when dropdown is open so it renders on top
+    def z_index : Int32
+      @dropdown_open ? 1000 : 0
+    end
+
     def on_close(&block : -> Nil) : Nil
       @on_close = block
     end
@@ -177,6 +201,9 @@ module Tui
           # Left border
           buffer.set(x, row_y, '│', dropdown_style) if clip.contains?(x, row_y)
 
+          # Space after left border
+          buffer.set(x + 1, row_y, ' ', item_style) if clip.contains?(x + 1, row_y)
+
           # Item text with hotkey
           label_x = x + 2
           item.label.each_char_with_index do |char, ci|
@@ -184,7 +211,7 @@ module Tui
             buffer.set(label_x + ci, row_y, char, char_style) if clip.contains?(label_x + ci, row_y)
           end
 
-          # Fill remaining space
+          # Fill remaining space to right border
           (item.label.size...width - 3).each do |dx|
             buffer.set(x + 2 + dx, row_y, ' ', item_style) if clip.contains?(x + 2 + dx, row_y)
           end
@@ -286,6 +313,56 @@ module Tui
           # Check item hotkeys
           if char = event.char
             if select_by_hotkey(char)
+              event.stop!
+              return true
+            end
+          end
+        end
+
+      when MouseEvent
+        if event.action.press? && event.button.left?
+          # Check if clicked on menu bar
+          if event.y == @rect.y
+            # Find which menu was clicked
+            x = @rect.x + 1
+            @menus.each_with_index do |menu, i|
+              menu_width = menu.label.size + 2
+              if event.x >= x && event.x < x + menu_width
+                if @dropdown_open && @active_menu == i
+                  close
+                else
+                  open(i)
+                end
+                event.stop!
+                return true
+              end
+              x += menu_width
+            end
+          elsif @dropdown_open
+            # Check if clicked in dropdown
+            menu = @menus[@active_menu]?
+            return false unless menu
+
+            dropdown_x = @rect.x + 1
+            @active_menu.times { |i| dropdown_x += @menus[i].label.size + 2 }
+            dropdown_y = @rect.y + 1
+            dropdown_width = menu.items.max_of { |item| item.separator ? 1 : item.label.size } + 4
+
+            # Check if click is within dropdown
+            if event.x >= dropdown_x && event.x < dropdown_x + dropdown_width
+              item_index = event.y - dropdown_y
+              if item_index >= 0 && item_index < menu.items.size
+                item = menu.items[item_index]
+                unless item.separator
+                  @active_item = item_index
+                  execute_current
+                  event.stop!
+                  return true
+                end
+              end
+            else
+              # Clicked outside dropdown - close
+              close
               event.stop!
               return true
             end

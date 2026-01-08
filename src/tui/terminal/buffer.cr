@@ -197,8 +197,11 @@ module Tui
             s << ANSI.move(x, y)
           end
 
-          # Apply style if changed
-          if last_style != cell.style
+          # Apply style if changed from last output OR if different from what was previously in this cell
+          # The second condition fixes a bug where consecutive cells with same new style but different
+          # old styles would cause the terminal to keep the old style
+          prev_cell_style = @prev_cells[idx].style
+          if last_style != cell.style || prev_cell_style != cell.style
             s << cell.style.to_ansi
             last_style = cell.style
           end
