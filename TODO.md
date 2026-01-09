@@ -309,23 +309,24 @@ A visual TUML editor built entirely with Crystal TUI itself — dogfooding the f
 ```
 
 ### Core Components
-- [ ] Widget Palette - Drag & drop widget selection
-- [ ] Visual Canvas - WYSIWYG widget placement
-- [ ] Property Inspector - Edit widget attributes
-- [ ] Tree View - Widget hierarchy navigator
-- [ ] Code Preview - Live TUML/Crystal output
+- [x] Widget Palette - Widget selection with categories
+- [x] Visual Canvas - Widget placement and selection
+- [x] Property Inspector - Edit widget attributes
+- [ ] Tree View - Widget hierarchy navigator (canvas has built-in tree)
+- [x] Code Preview - Live TUML/Crystal output (Pug, YAML, JSON, Crystal)
 - [ ] Theme Preview - Dark/light mode toggle
 
 ### Interactions
+- [x] Add widgets from palette to canvas (Enter/click)
+- [x] Click to select widgets
 - [ ] Drag widgets from palette to canvas
-- [ ] Click to select, double-click to edit
 - [ ] Resize widgets with mouse
-- [ ] Keyboard shortcuts for common actions
+- [x] Keyboard shortcuts (Tab=focus, Del=delete, Ctrl+S=save, Ctrl+Q=quit)
 - [ ] Undo/redo support
 
 ### Export Formats
-- [ ] TUML (Pug, YAML, JSON)
-- [ ] Crystal code
+- [x] TUML (Pug, YAML, JSON)
+- [x] Crystal code
 - [ ] Standalone executable
 
 ### Meta Goal

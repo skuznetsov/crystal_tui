@@ -16,6 +16,8 @@ crystal: ">= 1.10.0"
 targets:
   tui:
     main: src/tui_cli.cr
+  tui_editor:
+    main: src/tui_editor/app.cr
   hello:
     main: examples/hello.cr
   file_manager:
