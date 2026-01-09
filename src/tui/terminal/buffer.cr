@@ -244,6 +244,63 @@ module Tui
       end
     end
 
+    # Get buffer content with ANSI color codes (for visual debugging)
+    def to_ansi : String
+      String.build do |s|
+        last_style : Style? = nil
+        @height.times do |y|
+          @width.times do |x|
+            cell = @cells[index(x, y)]
+            # Skip continuation cells
+            next if cell.continuation?
+
+            if last_style != cell.style
+              s << cell.style.to_ansi
+              last_style = cell.style
+            end
+            s << cell.char
+          end
+          s << ANSI.reset << '\n'
+          last_style = nil
+        end
+      end
+    end
+
+    # Save buffer as ANSI-colored text file
+    def save_ansi(path : String) : Nil
+      File.write(path, to_ansi)
+    end
+
+    # Get buffer as simple grid for analysis (returns array of rows)
+    def to_grid : Array(String)
+      (0...@height).map do |y|
+        String.build do |s|
+          @width.times do |x|
+            cell = @cells[index(x, y)]
+            s << (cell.continuation? ? ' ' : cell.char)
+          end
+        end.rstrip
+      end
+    end
+
+    # Debug dump: show non-space characters with positions
+    def debug_dump : String
+      String.build do |s|
+        s << "Buffer #{@width}x#{@height}\n"
+        s << "=" * 40 << "\n"
+        @height.times do |y|
+          row = String.build do |rs|
+            @width.times do |x|
+              cell = @cells[index(x, y)]
+              rs << (cell.continuation? ? ' ' : cell.char)
+            end
+          end
+          stripped = row.rstrip
+          s << "Row #{y.to_s.rjust(2)}: |#{stripped}|\n" unless stripped.empty?
+        end
+      end
+    end
+
     # Calculate flat array index from x,y coordinates
     @[AlwaysInline]
     private def index(x : Int32, y : Int32) : Int32

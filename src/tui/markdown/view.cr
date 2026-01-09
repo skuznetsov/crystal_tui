@@ -1,6 +1,10 @@
 # MarkdownView - renders markdown with streaming support
 module Tui
   class MarkdownView < Widget
+    # Background color for the view (nil = transparent/inherit from parent)
+    # Set this to match parent container's background for proper rendering
+    property background : Color? = nil
+
     # Styles for different elements
     property heading1_style : Style = Style.new(fg: Color.white, attrs: Attributes::Bold)
     property heading2_style : Style = Style.new(fg: Color.cyan, attrs: Attributes::Bold)
@@ -27,6 +31,18 @@ module Tui
     property cursor_style : Style = Style.new(fg: Color.cyan, attrs: Attributes::Blink)
     property? streaming : Bool = false
 
+    # Details (collapsible) styles
+    property details_header_style : Style = Style.new(fg: Color.cyan)
+    property details_content_style : Style = Style.new(fg: Color.palette(250))
+    property details_collapsed_char : Char = '▶'
+    property details_expanded_char : Char = '▼'
+
+    # Track expanded state of details blocks by id
+    @expanded_details : Set(String) = Set(String).new
+
+    # Track clickable regions for details headers
+    @details_regions : Array(Tuple(Rect, String)) = [] of Tuple(Rect, String)
+
     # Scroll
     @scroll_y : Int32 = 0
     @content_height : Int32 = 0
@@ -37,6 +53,8 @@ module Tui
 
     # Rendered lines cache
     @rendered_lines : Array(Array(Tuple(Char, Style))) = [] of Array(Tuple(Char, Style))
+    @last_render_width : Int32 = 0
+    @rendered_with_default_width : Bool = false
 
     # Callbacks
     @on_link_click : Proc(String, Nil)?
@@ -47,12 +65,41 @@ module Tui
       @focusable = true
     end
 
+    # Apply view's background color to a style if bg is default
+    private def with_background(style : Style) : Style
+      if bg = @background
+        # Only override if style has default background
+        if style.bg.default?
+          Style.new(fg: style.fg, bg: bg, attrs: style.attrs)
+        else
+          style
+        end
+      else
+        style
+      end
+    end
+
     # Set markdown content (full replace)
     def content=(markdown : String) : Nil
+      # Check if we're at bottom before changing content
+      # Only auto-scroll if rect is valid (height > 0), otherwise scroll calculation is meaningless
+      was_at_bottom = @rect.height > 0 && at_bottom?
+
       @raw_markdown = markdown
       @document = Markdown.parse(markdown)
       render_to_lines
+
+      # Auto-scroll to bottom if we were already at bottom
+      if was_at_bottom
+        scroll_to_bottom
+      end
+
       mark_dirty!
+    end
+
+    # Check if scrolled to bottom (or within 2 lines of bottom)
+    def at_bottom? : Bool
+      @scroll_y >= max_scroll - 2
     end
 
     def content : String
@@ -138,7 +185,10 @@ module Tui
     # Pre-render to line buffer
     private def render_to_lines : Nil
       @rendered_lines.clear
+      @details_regions.clear
+      @rendered_with_default_width = @rect.width == 0
       width = @rect.width > 0 ? @rect.width : 80  # Default width
+      @last_render_width = width
 
       @document.each do |block|
         case block.type
@@ -179,6 +229,9 @@ module Tui
         when .table?
           render_table(block, width)
           add_blank_line
+        when .details?
+          render_details(block, width)
+          add_blank_line
         end
       end
 
@@ -197,11 +250,15 @@ module Tui
       prefix_style : Style? = nil
     ) : Nil
       line = [] of Tuple(Char, Style)
+      display_width = 0  # Track display width, not character count
 
       # Add prefix
       prefix.each_char do |c|
         line << {c, prefix_style || base_style}
+        display_width += Unicode.char_width(c)
       end
+
+      prefix_display_width = display_width  # Remember prefix width for wrapped lines
 
       elements.each do |elem|
         style = case elem.type
@@ -216,13 +273,23 @@ module Tui
                 end
 
         elem.text.each_char do |c|
-          if c == '\n' || line.size >= width
+          char_w = Unicode.char_width(c)
+
+          if c == '\n' || display_width + char_w > width
             @rendered_lines << line
             line = [] of Tuple(Char, Style)
+            display_width = 0
             # Continue with same indent for wrapped lines
-            prefix.size.times { line << {' ', base_style} }
+            prefix_display_width.times do
+              line << {' ', base_style}
+              display_width += 1
+            end
           end
-          line << {c, style} unless c == '\n'
+
+          unless c == '\n'
+            line << {c, style}
+            display_width += char_w
+          end
         end
       end
 
@@ -290,6 +357,76 @@ module Tui
       line = [] of Tuple(Char, Style)
       width.times { line << {'─', @hr_style} }
       @rendered_lines << line
+    end
+
+    private def render_details(block : Markdown::Block, width : Int32) : Nil
+      details_id = block.details_id || "details-unknown"
+      summary = block.summary || "Details"
+      is_expanded = @expanded_details.includes?(details_id)
+
+      # Record the line index for click detection
+      header_line_idx = @rendered_lines.size
+
+      # Render header: ▶ Summary (or ▼ Summary if expanded)
+      header_line = [] of Tuple(Char, Style)
+      toggle_char = is_expanded ? @details_expanded_char : @details_collapsed_char
+      header_line << {toggle_char, @details_header_style}
+      header_line << {' ', @details_header_style}
+      summary.each_char do |c|
+        break if header_line.size >= width
+        header_line << {c, @details_header_style}
+      end
+      @rendered_lines << header_line
+
+      # Store clickable region (will be adjusted in render based on scroll)
+      # Store line index and id for click detection
+      @details_regions << {Rect.new(0, header_line_idx, width, 1), details_id}
+
+      # If expanded, render content
+      if is_expanded && (content = block.details_content)
+        # Parse and render content as sub-document
+        content.lines.each do |content_line|
+          line = [] of Tuple(Char, Style)
+          line << {' ', @details_content_style}
+          line << {' ', @details_content_style}
+          line << {'│', Style.new(fg: Color.palette(240))}
+          line << {' ', @details_content_style}
+          content_line.each_char do |c|
+            break if line.size >= width
+            line << {c, @details_content_style}
+          end
+          @rendered_lines << line
+        end
+      end
+    end
+
+    # Toggle details expanded/collapsed state
+    def toggle_details(details_id : String) : Nil
+      if @expanded_details.includes?(details_id)
+        @expanded_details.delete(details_id)
+      else
+        @expanded_details << details_id
+      end
+      render_to_lines
+      mark_dirty!
+    end
+
+    # Expand all details
+    def expand_all_details : Nil
+      @document.each do |block|
+        if block.type.details? && (id = block.details_id)
+          @expanded_details << id
+        end
+      end
+      render_to_lines
+      mark_dirty!
+    end
+
+    # Collapse all details
+    def collapse_all_details : Nil
+      @expanded_details.clear
+      render_to_lines
+      mark_dirty!
     end
 
     private def render_table(block : Markdown::Block, max_width : Int32) : Nil
@@ -374,29 +511,50 @@ module Tui
         render_to_lines
       end
 
-      # Clear background
-      bg_style = @text_style
-      @rect.height.times do |row|
-        @rect.width.times do |col|
-          px = @rect.x + col
-          py = @rect.y + row
-          buffer.set(px, py, ' ', bg_style) if clip.contains?(px, py)
-        end
-      end
+      # Determine background: explicit @background > @text_style.bg > nil (parent controls)
+      clear_bg = @background || @text_style.bg
 
-      # Render visible lines
+      # Render visible lines with proper clearing
       visible_lines = @rect.height
       visible_lines.times do |screen_row|
         line_idx = @scroll_y + screen_row
-        break if line_idx >= @rendered_lines.size
-
-        line = @rendered_lines[line_idx]
         y = @rect.y + screen_row
 
-        line.each_with_index do |(char, style), col|
-          x = @rect.x + col
-          break if col >= @rect.width
-          buffer.set(x, y, char, style) if clip.contains?(x, y)
+        # Clear entire line first if we have explicit background (prevents ghosting from wide chars)
+        if clear_bg && !clear_bg.default?
+          clear_style = Style.new(fg: @text_style.fg, bg: clear_bg)
+          @rect.width.times do |col|
+            px = @rect.x + col
+            buffer.set(px, y, ' ', clear_style) if clip.contains?(px, y)
+          end
+        end
+
+        # Skip if past content
+        next if line_idx >= @rendered_lines.size
+
+        line = @rendered_lines[line_idx]
+
+        # Render characters tracking display width for wide chars
+        display_col = 0
+        line.each do |(char, style)|
+          break if display_col >= @rect.width
+
+          x = @rect.x + display_col
+          if clip.contains?(x, y)
+            # Apply view's background to style if needed
+            final_style = with_background(style)
+            buffer.set(x, y, char, final_style)
+          end
+
+          # Advance by character's display width
+          char_width = Unicode.char_width(char)
+          display_col += char_width
+
+          # For wide chars, clear the second cell to prevent ghosting
+          if char_width > 1 && display_col <= @rect.width
+            next_x = @rect.x + display_col - 1
+            # The terminal will handle wide char display, but we mark the cell
+          end
         end
       end
 
@@ -421,8 +579,8 @@ module Tui
     end
 
     private def need_rerender? : Bool
-      # Simple check - could be smarter
-      false
+      # Re-render if width changed since last render, or if last render used default width
+      @rendered_with_default_width || @rect.width != @last_render_width
     end
 
     private def draw_scrollbar(buffer : Buffer, clip : Rect) : Nil
@@ -502,6 +660,22 @@ module Tui
           scroll_down(3)
           event.stop!
           return true
+        elsif event.action.press? && event.button.left?
+          # Check for click on details header
+          if event.in_rect?(@rect)
+            # Convert screen Y to content line
+            screen_y = event.y - @rect.y
+            content_line = @scroll_y + screen_y
+
+            # Check if this line is a details header
+            @details_regions.each do |(region, details_id)|
+              if region.y == content_line
+                toggle_details(details_id)
+                event.stop!
+                return true
+              end
+            end
+          end
         end
       end
 

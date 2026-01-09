@@ -14,6 +14,7 @@ module Tui
       HorizontalRule
       Blockquote
       Table
+      Details  # Collapsible section
     end
 
     # Inline element types
@@ -73,6 +74,9 @@ module Tui
       property items : Array(ListItem)?         # For lists
       property rows : Array(TableRow)?          # For tables
       property col_widths : Array(Int32)?       # For tables
+      property summary : String?                # For details (collapsible)
+      property details_content : String?        # For details (inner content)
+      property details_id : String?             # For details (unique id for state)
 
       def initialize(
         @type : BlockType,
@@ -81,7 +85,10 @@ module Tui
         @code : String? = nil,
         @items : Array(ListItem)? = nil,
         @rows : Array(TableRow)? = nil,
-        @col_widths : Array(Int32)? = nil
+        @col_widths : Array(Int32)? = nil,
+        @summary : String? = nil,
+        @details_content : String? = nil,
+        @details_id : String? = nil
       )
       end
     end
@@ -150,6 +157,11 @@ module Tui
           return parse_code_block
         end
 
+        # Details block: <details>
+        if line.strip.starts_with?("<details")
+          return parse_details
+        end
+
         # Blockquote: >
         if line.starts_with?(">")
           return parse_blockquote
@@ -197,6 +209,46 @@ module Tui
           BlockType::CodeBlock,
           language: language,
           code: code_lines.join("\n")
+        )
+      end
+
+      # Parse <details><summary>...</summary>...</details>
+      @details_counter : Int32 = 0
+
+      private def parse_details : Block
+        advance  # Skip <details> line
+
+        summary = "Details"
+        content_lines = [] of String
+
+        # Look for <summary>...</summary>
+        while (line = current_line)
+          stripped = line.strip
+
+          # Check for summary tag
+          if m = stripped.match(/<summary>(.+)<\/summary>/)
+            summary = m[1]
+            advance
+            next
+          end
+
+          # End of details
+          if stripped.starts_with?("</details")
+            advance
+            break
+          end
+
+          content_lines << line
+          advance
+        end
+
+        @details_counter += 1
+
+        Block.new(
+          BlockType::Details,
+          summary: summary,
+          details_content: content_lines.join("\n"),
+          details_id: "details-#{@details_counter}"
         )
       end
 

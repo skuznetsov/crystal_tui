@@ -267,31 +267,62 @@ describe Tui::Markdown::Parser do
   end
 
   describe "complex document" do
-    it "parses mixed content" do
+    it "parses mixed content without indentation" do
       md = <<-MD
-      # Welcome
+# Welcome
 
-      This is a **test** document.
+This is a **test** document.
 
-      ## Features
+## Features
 
-      - Feature one
-      - Feature two
+- Feature one
+- Feature two
 
-      ```crystal
-      puts "hello"
-      ```
+```crystal
+puts "hello"
+```
 
-      > A quote
+> A quote
 
-      ---
+---
 
-      [Link](https://example.com)
-      MD
+[Link](https://example.com)
+MD
 
       doc = Tui::Markdown.parse(md)
       doc.size.should be > 5
       doc[0].type.should eq Tui::Markdown::BlockType::Heading1
+    end
+  end
+
+  describe "whitespace handling" do
+    it "does NOT parse heading with leading spaces" do
+      # This is expected behavior - markdown requires # at line start
+      doc = Tui::Markdown.parse("      # Not a heading")
+      doc.size.should eq 1
+      doc[0].type.should eq Tui::Markdown::BlockType::Paragraph
+    end
+
+    it "parses heading at line start" do
+      doc = Tui::Markdown.parse("# Real heading")
+      doc[0].type.should eq Tui::Markdown::BlockType::Heading1
+    end
+
+    it "parses list with leading spaces (indented)" do
+      doc = Tui::Markdown.parse("  - Indented item")
+      doc[0].type.should eq Tui::Markdown::BlockType::UnorderedList
+    end
+
+    it "handles empty lines correctly" do
+      doc = Tui::Markdown.parse("\n\n# Heading\n\n")
+      doc.size.should eq 1
+      doc[0].type.should eq Tui::Markdown::BlockType::Heading1
+    end
+
+    it "preserves trailing whitespace (not stripped by parser)" do
+      # Note: trailing whitespace is preserved by parser - stripping happens during rendering
+      doc = Tui::Markdown.parse("# Heading   \n\nText   ")
+      doc[0].elements[0].text.should eq "Heading   "
     end
   end
 end
