@@ -11,6 +11,8 @@ module Tui
     property ratio : Float64 = 0.5
     property min_first : Int32 = 3
     property min_second : Int32 = 3
+    property max_first : Int32? = nil   # Optional maximum for first pane
+    property max_second : Int32? = nil  # Optional maximum for second pane
     property border_color : Color = Color.white
     property splitter_color : Color = Color.white
     property splitter_drag_color : Color = Color.yellow
@@ -18,6 +20,8 @@ module Tui
     property first_title : String = ""
     property second_title : String = ""
     property title_color : Color = Color.yellow
+    property first_title_offset : Int32 = 1   # Offset from edge for first title
+    property second_title_offset : Int32 = 1  # Offset from edge/splitter for second title
 
     # Focus highlighting
     property focus_border_color : Color? = nil
@@ -128,7 +132,7 @@ module Tui
       when .horizontal?
         # Vertical splitter: [first | second]
         total = inner_w - 1  # 1 for splitter
-        first_w = (total * @ratio).to_i.clamp(@min_first, total - @min_second)
+        first_w = calculate_first_size(total)
         second_w = total - first_w
         @splitter_pos = inner_x + first_w
 
@@ -138,13 +142,35 @@ module Tui
       when .vertical?
         # Horizontal splitter: [first / second]
         total = inner_h - 1  # 1 for splitter
-        first_h = (total * @ratio).to_i.clamp(@min_first, total - @min_second)
+        first_h = calculate_first_size(total)
         second_h = total - first_h
         @splitter_pos = inner_y + first_h
 
         @first_area = Rect.new(inner_x, inner_y, inner_w, first_h)
         @second_area = Rect.new(inner_x, @splitter_pos + 1, inner_w, second_h)
       end
+    end
+
+    # Calculate first pane size respecting min/max constraints
+    private def calculate_first_size(total : Int32) : Int32
+      # Calculate based on ratio
+      first_size = (total * @ratio).to_i
+
+      # Apply min constraints
+      min = @min_first
+      max = total - @min_second
+
+      # Apply max_first if set
+      if mf = @max_first
+        max = Math.min(max, mf)
+      end
+
+      # Apply max_second if set (which limits how small first can be)
+      if ms = @max_second
+        min = Math.max(min, total - ms)
+      end
+
+      first_size.clamp(min, max)
     end
 
     private def draw_outer_border(buffer : Buffer, clip : Rect, style : Style) : Nil
@@ -225,20 +251,48 @@ module Tui
       if title.empty?
         width.times { |i| buffer.set(x + i, y, '─', style) if clip.contains?(x + i, y) }
       else
-        # Draw: ─┤ Title ├───
-        display_title = title
-        decorated = "┤ #{display_title} ├"
-        title_start = 1
+        # Draw: ─┤ Title ├─── (truncate if needed to fit before splitter)
+        # For horizontal splits, title must fit before the splitter junction
+        if @direction.horizontal? && @show_border
+          # Edge starts at x = @rect.x + 1, splitter is at @splitter_pos
+          # Available width for title = splitter_pos - (rect.x + 1) = splitter_pos - rect.x - 1
+          first_section_edge_width = @splitter_pos - @rect.x - 1
+        else
+          first_section_edge_width = width
+        end
+
+        # Minimum width for "┤ X ├" is 5 characters
+        if first_section_edge_width >= 5
+          max_title_chars = first_section_edge_width - 4  # 4 = "┤ " + " ├"
+
+          display_title = if title.size > max_title_chars
+                            max_title_chars > 1 ? title[0, max_title_chars - 1] + "…" : "…"
+                          else
+                            title
+                          end
+
+          decorated = "┤ #{display_title} ├"
+        else
+          # Too narrow for any title, just draw lines
+          decorated = ""
+        end
+
+        title_start = @first_title_offset
         title_end = title_start + decorated.size
 
         width.times do |i|
           px = x + i
           next unless clip.contains?(px, y)
 
-          if i >= title_start && i < title_end
-            char = decorated[i - title_start]
-            char_style = (char == '┤' || char == '├') ? actual_style : title_style
-            buffer.set(px, y, char, char_style)
+          if !decorated.empty? && i >= title_start && i < title_end
+            idx = i - title_start
+            if idx < decorated.size
+              char = decorated[idx]
+              char_style = (char == '┤' || char == '├') ? actual_style : title_style
+              buffer.set(px, y, char, char_style)
+            else
+              buffer.set(px, y, '─', style)
+            end
           else
             buffer.set(px, y, '─', style)
           end
@@ -329,7 +383,7 @@ module Tui
           # Draw: ─┤ Title ├───
           display_title = @second_title
           decorated = "┤ #{display_title} ├"
-          title_start = 1
+          title_start = @second_title_offset  # Use offset property
           title_end = title_start + decorated.size
           line_width = x_end - x_start
 
@@ -352,9 +406,9 @@ module Tui
     private def draw_title_on_edge(buffer : Buffer, clip : Rect, x : Int32, y : Int32, width : Int32, title : String, style : Style, title_style : Style) : Nil
       return if width <= 0
       decorated = "┤ #{title} ├"
-      title_start = 1
+      title_start = @second_title_offset  # Use offset property
 
-      Math.min(width, decorated.size + 2).times do |i|
+      Math.min(width, decorated.size + title_start).times do |i|
         px = x + i
         next unless clip.contains?(px, y)
 
