@@ -29,11 +29,11 @@ module Tui
     property bg_color : Color = Color.white          # ANSI white = light gray
     property title_color : Color = Color.blue
     property message_color : Color = Color.black
-    property button_color : Color = Color.black      # Normal button: black on cyan
-    property button_bg : Color = Color.cyan
-    property button_focus_color : Color = Color.white # Focused: white on cyan (highlighted)
-    property button_focus_bg : Color = Color.cyan
-    property button_focus_attrs : Attributes = Attributes::Bold | Attributes::Reverse
+    property button_color : Color = Color.black       # Normal button: black on dialog bg
+    property button_bg : Color = Color.white          # Match dialog background
+    property button_focus_color : Color = Color.black # Focused: black on cyan
+    property button_focus_bg : Color = Color.cyan     # Cyan background for active
+    property button_focus_attrs : Attributes = Attributes::None
     property input_color : Color = Color.black
     property input_bg : Color = Color.cyan
     property shadow : Bool = true
@@ -216,27 +216,44 @@ module Tui
     private def draw_buttons(buffer : Buffer, clip : Rect, cr : Rect) : Nil
       return if @buttons.empty?
 
-      # Calculate total buttons width
-      total_width = @buttons.sum(&.label.size) + (@buttons.size - 1) * 2  # 2 spaces between
+      # Check if input has focus (buttons have focus when input doesn't)
+      input_has_focus = @input.try(&.focused?) || false
+      buttons_have_focus = focused? && !input_has_focus
+
+      # Build transformed labels first
+      labels = @buttons.map_with_index do |button, i|
+        is_focused = i == @focused_button && buttons_have_focus
+        label = button.label
+        if label.starts_with?("[ ") && label.ends_with?(" ]")
+          inner = label[2...-2]
+          if is_focused
+            "[< #{inner} >]"
+          else
+            "[  #{inner}  ]"
+          end
+        else
+          label
+        end
+      end
+
+      # Calculate total width with transformed labels
+      total_width = labels.sum(&.size) + (@buttons.size - 1) * 2  # 2 spaces between
 
       # Center buttons
       y = cr.bottom - 2
       x = cr.x + (cr.width - total_width) // 2
 
-      # Check if input has focus (buttons have focus when input doesn't)
-      input_has_focus = @input.try(&.focused?) || false
-      buttons_have_focus = focused? && !input_has_focus
-
       @buttons.each_with_index do |button, i|
         is_focused = i == @focused_button && buttons_have_focus
+        label = labels[i]
 
         btn_style = if is_focused
-                      Style.new(fg: @button_focus_color, bg: @button_focus_bg, attrs: @button_focus_attrs)
+                      Style.new(fg: @button_focus_color, bg: @button_focus_bg)
                     else
                       Style.new(fg: @button_color, bg: @button_bg)
                     end
 
-        button.label.each_char do |char|
+        label.each_char do |char|
           draw_char(buffer, clip, x, y, char, btn_style)
           x += 1
         end
