@@ -110,9 +110,45 @@ module Tui
         return parse_escape_sequence
       end
 
-      # Regular character
-      char = @buffer.shift.unsafe_chr
+      # Regular character - need to decode UTF-8 properly
+      char = decode_utf8_char
+      return nil unless char  # Need more bytes for multi-byte char
       return KeyEvent.new(char)  # Positional to call char_to_key constructor
+    end
+
+    # Decode a complete UTF-8 character from buffer
+    private def decode_utf8_char : Char?
+      return nil if @buffer.empty?
+
+      first = @buffer[0]
+
+      # Determine how many bytes this UTF-8 character needs
+      byte_count = if first < 0x80
+                     1  # ASCII (0xxxxxxx)
+                   elsif first & 0xE0 == 0xC0
+                     2  # 2-byte sequence (110xxxxx)
+                   elsif first & 0xF0 == 0xE0
+                     3  # 3-byte sequence (1110xxxx)
+                   elsif first & 0xF8 == 0xF0
+                     4  # 4-byte sequence (11110xxx)
+                   else
+                     # Invalid UTF-8 start byte, consume and return replacement
+                     @buffer.shift
+                     return '\uFFFD'
+                   end
+
+      # Check if we have enough bytes
+      return nil if @buffer.size < byte_count
+
+      # Extract bytes and decode
+      bytes = Slice(UInt8).new(byte_count)
+      byte_count.times do |i|
+        bytes[i] = @buffer.shift
+      end
+
+      # Convert bytes to string, then extract char
+      str = String.new(bytes)
+      str.empty? ? '\uFFFD' : str[0]
     end
 
     private def parse_escape_sequence : Event?

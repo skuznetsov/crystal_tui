@@ -58,6 +58,17 @@ module Tui
         end
       end
 
+      # Special handling for ctrl+letter: terminals send control characters directly
+      # without setting the Ctrl modifier. Ctrl+A = '\u0001', Ctrl+Z = '\u001A'
+      if target_mods.ctrl? && !target_mods.alt? && !target_mods.shift? && target_key.size == 1
+        if char = @char
+          ctrl_char_code = target_key[0].ord - 'a'.ord + 1
+          if char.ord == ctrl_char_code && @modifiers == Modifiers::None
+            return true
+          end
+        end
+      end
+
       return false unless @modifiers == target_mods
 
       case target_key
