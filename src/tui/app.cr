@@ -150,6 +150,19 @@ module Tui
       end
     end
 
+    # Mount and layout without starting terminal (for testing)
+    def mount_headless(width : Int32, height : Int32) : Nil
+      @buffer = Buffer.new(width, height)
+      @rect = Rect.new(0, 0, width, height)
+      on_mount
+      layout_children
+    end
+
+    # Refresh layout (public access to layout_children)
+    def refresh : Nil
+      layout_children
+    end
+
     private def run_with_input : Nil
       # Mount widgets
       on_mount
@@ -297,7 +310,19 @@ module Tui
     end
 
     def render(buffer : Buffer, clip : Rect) : Nil
-      # App renders itself via render_all
+      # Render children (for headless testing via harness)
+      # When running normally, render_all is used instead
+      @children.sort_by(&.z_index).each do |child|
+        next unless child.visible?
+        if child_clip = clip.intersect(child.render_rect)
+          child.render(buffer, child_clip)
+        end
+      end
+
+      # Render overlays
+      Tui.overlays.each do |overlay|
+        overlay.call(buffer, clip)
+      end
     end
 
     # Render CSS error overlay (dev mode only)

@@ -5,6 +5,7 @@ module Tui
     @event_channel : Channel(Event)
     @running : Bool = false
     @input_fiber : Fiber?
+    @input_provider : InputProvider
 
     # Byte constants for parsing
     BYTE_0 = '0'.ord.to_u8
@@ -28,10 +29,13 @@ module Tui
     BYTE_BRACKET = '['.ord.to_u8
     BYTE_ESC = 27_u8
 
-    def initialize
+    def initialize(@input_provider : InputProvider = StdinInputProvider.new)
       @buffer = [] of UInt8
       @event_channel = Channel(Event).new(32)  # Buffered channel
     end
+
+    # Get/set the input provider (for testing)
+    property input_provider : InputProvider
 
     # Start the input reading fiber
     def start : Nil
@@ -74,7 +78,7 @@ module Tui
     private def input_loop : Nil
       while @running
         # Block until byte available (event-driven!)
-        byte = STDIN.read_byte
+        byte = @input_provider.read_byte
         break unless byte
 
         @buffer << byte
@@ -86,7 +90,7 @@ module Tui
         end
       end
     rescue IO::Error
-      # STDIN closed
+      # Input closed
     end
 
     private def parse_buffer : Event?

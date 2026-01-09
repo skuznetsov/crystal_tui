@@ -16,6 +16,7 @@ require "./tui/terminal/ansi"
 require "./tui/terminal/cell"
 require "./tui/terminal/buffer"
 require "./tui/terminal/terminal"
+require "./tui/terminal/input_provider"
 require "./tui/terminal/input"
 
 # Events
@@ -98,6 +99,9 @@ require "./tui/tuml/builder"
 
 # Application
 require "./tui/app"
+
+# Testing
+require "./tui/testing/harness"
 
 module Tui
   VERSION = "0.1.0"

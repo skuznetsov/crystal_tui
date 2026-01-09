@@ -141,8 +141,11 @@ module Tui
       return if @rect.empty?
 
       if @border_style == BorderStyle::None || @show_borders == BorderSides.none
-        # No border, just render content
-        @content.try &.render(buffer, clip)
+        # No border, layout and render content
+        if content = @content
+          content.rect = inner_rect
+          content.render(buffer, clip)
+        end
         return
       end
 
