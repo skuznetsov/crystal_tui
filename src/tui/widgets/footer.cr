@@ -52,12 +52,18 @@ module Tui
       y = @rect.y
       x = @rect.x
 
+      key_style = Style.new(fg: @key_color, bg: @key_bg)
+      label_style = Style.new(fg: @label_color, bg: @label_bg)
+
+      # First, fill entire width with background to avoid gaps
+      @rect.width.times do |col|
+        px = @rect.x + col
+        buffer.set(px, y, ' ', label_style) if clip.contains?(px, y)
+      end
+
       # Calculate width per binding (10 F-keys)
       num_keys = 10
       width_per_key = @rect.width // num_keys
-
-      key_style = Style.new(fg: @key_color, bg: @key_bg)
-      label_style = Style.new(fg: @label_color, bg: @label_bg)
 
       num_keys.times do |i|
         binding = @bindings.find { |b| b.key == i + 1 }
@@ -88,11 +94,7 @@ module Tui
         end
       end
 
-      # Fill any remaining space
-      while x < @rect.right
-        draw_char(buffer, clip, x, y, ' ', label_style)
-        x += 1
-      end
+      # Background already filled at the start, no need to fill remaining
     end
 
     private def draw_char(buffer : Buffer, clip : Rect, x : Int32, y : Int32, char : Char, style : Style) : Nil

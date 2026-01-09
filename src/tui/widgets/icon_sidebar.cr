@@ -144,13 +144,18 @@ module Tui
 
       # Calculate icon width and center position
       icon_width = Unicode.char_width(item.icon)
-      content_width = @width - (@show_border ? 1 : 0)  # Available width (minus border)
-      icon_x = @rect.x + (content_width - icon_width) // 2  # Center icon
+      # Reserve space for: indicator (1) + content + border (0/1)
+      indicator_space = @show_active_indicator ? 1 : 0
+      border_space = @show_border ? 1 : 0
+      bg_width = @width - border_space  # Full width for background (minus border only)
+      icon_area_width = @width - indicator_space - border_space  # Area for icon (minus indicator too)
+      # Center icon within icon area (after indicator)
+      icon_x = @rect.x + indicator_space + (icon_area_width - icon_width) // 2
       icon_y = y + 1
 
-      # Background for active item
+      # Background for active item (covers full width except border)
       if is_active
-        content_width.times do |col|
+        bg_width.times do |col|
           x = @rect.x + col
           [y, y + 1, y + 2].each do |row|
             buffer.set(x, row, ' ', @active_style) if clip.contains?(x, row) && row < @rect.bottom
