@@ -52,6 +52,7 @@ module Tui
 
     # Callbacks
     @on_tab_close : Proc(String, Nil)?
+    @on_tab_switch : Proc(String, Nil)?
 
     def initialize(id : String? = nil)
       super(id)
@@ -103,7 +104,11 @@ module Tui
     end
 
     def active_tab=(index : Int32) : Nil
+      old_tab = @active_tab
       @active_tab = index.clamp(0, @tabs.size - 1)
+      if old_tab != @active_tab
+        @on_tab_switch.try &.call(@tabs[@active_tab]?.try(&.id) || "")
+      end
       mark_dirty!
     end
 
@@ -113,6 +118,10 @@ module Tui
 
     def on_tab_close(&block : String -> Nil) : Nil
       @on_tab_close = block
+    end
+
+    def on_tab_switch(&block : String -> Nil) : Nil
+      @on_tab_switch = block
     end
 
     def close_tab(id : String) : Bool
@@ -126,11 +135,18 @@ module Tui
       @tabs.delete_at(index)
 
       # Adjust active tab
+      old_active = @active_tab
       if @active_tab >= @tabs.size
         @active_tab = (@tabs.size - 1).clamp(0, Int32::MAX)
       end
 
       @on_tab_close.try &.call(id)
+
+      # Notify if active tab changed
+      if old_active != @active_tab || index <= old_active
+        @on_tab_switch.try &.call(@tabs[@active_tab]?.try(&.id) || "")
+      end
+
       mark_dirty!
       true
     end
@@ -144,7 +160,11 @@ module Tui
     def switch_to(id : String) : Bool
       @tabs.each_with_index do |tab, i|
         if tab.id == id
+          old_tab = @active_tab
           @active_tab = i
+          if old_tab != @active_tab
+            @on_tab_switch.try &.call(id)
+          end
           mark_dirty!
           return true
         end
@@ -537,7 +557,7 @@ module Tui
             event.stop!
             return true
           when .enter?
-            @active_tab = @overflow_selected
+            self.active_tab = @overflow_selected
             close_overflow
             event.stop!
             return true
@@ -579,9 +599,8 @@ module Tui
             if char >= '1' && char <= '9'
               index = char.to_i - 1
               if index < @tabs.size
-                @active_tab = index
+                self.active_tab = index
                 close_overflow
-                mark_dirty!
                 event.stop!
                 return true
               end
@@ -606,7 +625,7 @@ module Tui
           # Check if click is in overflow menu
           if @overflow_open
             if menu_index = overflow_menu_item_at(event.x, event.y)
-              @active_tab = menu_index
+              self.active_tab = menu_index
               close_overflow
               event.stop!
               return true
@@ -617,8 +636,7 @@ module Tui
 
           # Check if click is on a tab
           if tab_index = tab_at(event.x, event.y)
-            @active_tab = tab_index
-            mark_dirty!
+            self.active_tab = tab_index
             event.stop!
             return true
           end
@@ -647,6 +665,13 @@ module Tui
               mark_dirty!
             end
           end
+        end
+      end
+
+      # Forward events to active content widget
+      if @active_tab >= 0 && @active_tab < @tabs.size
+        if content = @tabs[@active_tab].content
+          return content.handle_event(event)
         end
       end
 
@@ -747,14 +772,13 @@ module Tui
     end
 
     private def next_tab : Nil
-      @active_tab = (@active_tab + 1) % @tabs.size
-      mark_dirty!
+      self.active_tab = (@active_tab + 1) % @tabs.size
     end
 
     private def prev_tab : Nil
-      @active_tab = (@active_tab - 1) % @tabs.size
-      @active_tab = @tabs.size - 1 if @active_tab < 0
-      mark_dirty!
+      new_index = (@active_tab - 1) % @tabs.size
+      new_index = @tabs.size - 1 if new_index < 0
+      self.active_tab = new_index
     end
   end
 end
