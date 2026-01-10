@@ -312,12 +312,15 @@ module Tui
     end
 
     # Get buffer as simple grid for analysis (returns array of rows)
+    # Continuation cells (second half of wide chars) are skipped to match terminal display
     def to_grid : Array(String)
       (0...@height).map do |y|
         String.build do |s|
           @width.times do |x|
             cell = @cells[index(x, y)]
-            s << (cell.continuation? ? ' ' : cell.char)
+            # Skip continuation cells - wide chars already occupy 2 terminal columns
+            next if cell.continuation?
+            s << cell.char
           end
         end.rstrip
       end
@@ -332,7 +335,9 @@ module Tui
           row = String.build do |rs|
             @width.times do |x|
               cell = @cells[index(x, y)]
-              rs << (cell.continuation? ? ' ' : cell.char)
+              # Skip continuation cells - wide chars already occupy 2 terminal columns
+              next if cell.continuation?
+              rs << cell.char
             end
           end
           stripped = row.rstrip
