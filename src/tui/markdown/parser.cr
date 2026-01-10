@@ -213,8 +213,6 @@ module Tui
       end
 
       # Parse <details><summary>...</summary>...</details>
-      @details_counter : Int32 = 0
-
       private def parse_details : Block
         advance  # Skip <details> line
 
@@ -242,13 +240,17 @@ module Tui
           advance
         end
 
-        @details_counter += 1
+        # Generate stable ID based on content (summary + first line of content)
+        # This ensures the ID remains stable even if new details blocks are added elsewhere
+        content_preview = content_lines.first(2).join(" ")[0, 50]
+        stable_key = "#{summary}:#{content_preview}"
+        details_id = "details-#{stable_key.hash.abs}"
 
         Block.new(
           BlockType::Details,
           summary: summary,
           details_content: content_lines.join("\n"),
-          details_id: "details-#{@details_counter}"
+          details_id: details_id
         )
       end
 
