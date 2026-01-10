@@ -546,17 +546,13 @@ module Tui
           if clip.contains?(x, y)
             # Apply view's background to style if needed
             final_style = with_background(style)
-            buffer.set(x, y, char, final_style)
-          end
-
-          # Advance by character's display width
-          char_width = Unicode.char_width(char)
-          display_col += char_width
-
-          # For wide chars, clear the second cell to prevent ghosting
-          if char_width > 1 && display_col <= @rect.width
-            next_x = @rect.x + display_col - 1
-            # The terminal will handle wide char display, but we mark the cell
+            # Use set_wide to properly handle wide characters (emoji, CJK)
+            # This sets both the main cell and continuation cell for width-2 chars
+            char_width = buffer.set_wide(x, y, char, final_style)
+            display_col += char_width
+          else
+            # Still advance display_col even if not clipped
+            display_col += Unicode.char_width(char)
           end
         end
       end
