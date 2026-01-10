@@ -60,9 +60,174 @@ module Tui
     @on_link_click : Proc(String, Nil)?
     @on_code_copy : Proc(String, Nil)?
 
+    # Text selection state
+    struct SelectionPos
+      property line : Int32
+      property col : Int32
+
+      def initialize(@line = 0, @col = 0)
+      end
+
+      def ==(other : SelectionPos) : Bool
+        @line == other.line && @col == other.col
+      end
+
+      def <(other : SelectionPos) : Bool
+        @line < other.line || (@line == other.line && @col < other.col)
+      end
+
+      def <=(other : SelectionPos) : Bool
+        self < other || self == other
+      end
+
+      def >=(other : SelectionPos) : Bool
+        !(self < other)
+      end
+
+      def >(other : SelectionPos) : Bool
+        other < self
+      end
+    end
+
+    @selection_start : SelectionPos = SelectionPos.new
+    @selection_end : SelectionPos = SelectionPos.new
+    @selecting : Bool = false
+    @has_selection : Bool = false
+    property selection_bg : Color = Color.rgb(60, 90, 150)  # Blue highlight
+
+    # Scrollbar drag state
+    @scrollbar_dragging : Bool = false
+    @scrollbar_drag_start_y : Int32 = 0
+    @scrollbar_drag_start_scroll : Int32 = 0
+
     def initialize(id : String? = nil)
       super(id)
       @focusable = true
+    end
+
+    # Convert screen coordinates to content position
+    private def screen_to_content_pos(screen_x : Int32, screen_y : Int32) : SelectionPos
+      # Convert screen Y to content line
+      content_line = @scroll_y + (screen_y - @rect.y)
+      content_line = content_line.clamp(0, (@rendered_lines.size - 1).clamp(0, Int32::MAX))
+
+      # Convert screen X to content column
+      content_col = screen_x - @rect.x
+      if line = @rendered_lines[content_line]?
+        content_col = content_col.clamp(0, line.size)
+      else
+        content_col = 0
+      end
+
+      SelectionPos.new(content_line, content_col)
+    end
+
+    # Get ordered selection bounds (start < end)
+    private def selection_bounds : Tuple(SelectionPos, SelectionPos)
+      if @selection_start < @selection_end
+        {@selection_start, @selection_end}
+      else
+        {@selection_end, @selection_start}
+      end
+    end
+
+    # Check if position is within selection
+    private def in_selection?(line : Int32, col : Int32) : Bool
+      return false unless @has_selection
+
+      start_pos, end_pos = selection_bounds
+      pos = SelectionPos.new(line, col)
+
+      pos >= start_pos && pos < end_pos
+    end
+
+    # Get selected text as plain text
+    def selected_text : String
+      return "" unless @has_selection
+
+      start_pos, end_pos = selection_bounds
+      result = String.build do |s|
+        (start_pos.line..end_pos.line).each do |line_idx|
+          next unless line = @rendered_lines[line_idx]?
+
+          start_col = (line_idx == start_pos.line) ? start_pos.col : 0
+          end_col = (line_idx == end_pos.line) ? end_pos.col : line.size
+
+          (start_col...end_col).each do |col_idx|
+            if cell = line[col_idx]?
+              s << cell[0]  # The character
+            end
+          end
+
+          # Add newline between lines (but not after last line)
+          s << '\n' if line_idx < end_pos.line
+        end
+      end
+      result
+    end
+
+    # Copy selection to clipboard (cross-platform: macOS, Linux)
+    def copy_selection_to_clipboard : Bool
+      text = selected_text
+      return false if text.empty?
+
+      {% if flag?(:darwin) %}
+        copy_to_clipboard_macos(text)
+      {% elsif flag?(:linux) %}
+        copy_to_clipboard_linux(text)
+      {% else %}
+        false
+      {% end %}
+    end
+
+    # macOS clipboard copy
+    private def copy_to_clipboard_macos(text : String) : Bool
+      begin
+        process = Process.new("pbcopy", shell: false, input: Process::Redirect::Pipe)
+        process.input.print(text)
+        process.input.close
+        process.wait
+        true
+      rescue
+        false
+      end
+    end
+
+    # Linux clipboard copy (tries xclip, then xsel)
+    private def copy_to_clipboard_linux(text : String) : Bool
+      # Try xclip first
+      begin
+        process = Process.new("xclip", ["-selection", "clipboard"], shell: false, input: Process::Redirect::Pipe)
+        process.input.print(text)
+        process.input.close
+        process.wait
+        return true
+      rescue
+        # xclip failed, try xsel
+      end
+
+      # Fallback to xsel
+      begin
+        process = Process.new("xsel", ["--clipboard", "--input"], shell: false, input: Process::Redirect::Pipe)
+        process.input.print(text)
+        process.input.close
+        process.wait
+        true
+      rescue
+        false
+      end
+    end
+
+    # Clear selection
+    def clear_selection : Nil
+      @has_selection = false
+      @selecting = false
+      mark_dirty!
+    end
+
+    # Check if there's an active selection
+    def has_selection? : Bool
+      @has_selection
     end
 
     # Apply view's background color to a style if bg is default
@@ -187,8 +352,13 @@ module Tui
       @rendered_lines.clear
       @details_regions.clear
       @rendered_with_default_width = @rect.width == 0
-      width = @rect.width > 0 ? @rect.width : 80  # Default width
-      @last_render_width = width
+
+      # Use width minus 1 to leave room for scrollbar
+      # We always render at scrollbar-aware width for consistency
+      # (better to have slightly narrower content than missing chars when scrollbar appears)
+      full_width = @rect.width > 0 ? @rect.width : 80  # Default width
+      width = full_width > 1 ? full_width - 1 : full_width  # Reserve scrollbar column
+      @last_render_width = full_width  # Track full width for change detection
 
       @document.each do |block|
         case block.type
@@ -511,25 +681,31 @@ module Tui
         render_to_lines
       end
 
+      # CRITICAL: Invalidate the entire region to force terminal update
+      # This ensures ghost characters from previous frames are always cleared
+      buffer.invalidate_region(@rect.x, @rect.y, @rect.width, @rect.height)
+
       # Determine background: explicit @background > @text_style.bg > nil (parent controls)
       clear_bg = @background || @text_style.bg
 
       # Render visible lines with proper clearing
       visible_lines = @rect.height
+      has_scrollbar = @content_height > @rect.height
+
       visible_lines.times do |screen_row|
         line_idx = @scroll_y + screen_row
         y = @rect.y + screen_row
 
-        # ALWAYS clear entire line first to prevent ghosting from shorter content
-        # Use explicit background if set, otherwise use default style
+        # Clear line to space characters
         clear_style = if clear_bg && !clear_bg.default?
                         Style.new(fg: @text_style.fg, bg: clear_bg)
                       else
                         Style.default
                       end
+        # Always clear full width including scrollbar column
         @rect.width.times do |col|
           px = @rect.x + col
-          buffer.set(px, y, ' ', clear_style) if clip.contains?(px, y)
+          buffer.set(px, y, ' ', clear_style)
         end
 
         # Skip if past content
@@ -537,23 +713,39 @@ module Tui
 
         line = @rendered_lines[line_idx]
 
-        # Render characters tracking display width for wide chars
+        # Content is pre-rendered at correct width (minus scrollbar space)
+        # Just need to render characters tracking display width for wide chars
+        # content_width excludes scrollbar column when scrollbar present
+        content_width = has_scrollbar ? @rect.width - 1 : @rect.width
         display_col = 0
+        char_idx = 0
         line.each do |(char, style)|
-          break if display_col >= @rect.width
+          char_w = Unicode.char_width(char)
+
+          # Stop if we've reached the content edge (before scrollbar)
+          # Also check if a wide character would overflow into scrollbar column
+          break if display_col >= content_width
+          break if display_col + char_w > content_width && char_w > 1
 
           x = @rect.x + display_col
           if clip.contains?(x, y)
             # Apply view's background to style if needed
             final_style = with_background(style)
+
+            # Apply selection highlight if position is in selection
+            if in_selection?(line_idx, char_idx)
+              final_style = Style.new(fg: final_style.fg, bg: @selection_bg, attrs: final_style.attrs)
+            end
+
             # Use set_wide to properly handle wide characters (emoji, CJK)
             # This sets both the main cell and continuation cell for width-2 chars
             char_width = buffer.set_wide(x, y, char, final_style)
             display_col += char_width
           else
             # Still advance display_col even if not clipped
-            display_col += Unicode.char_width(char)
+            display_col += char_w
           end
+          char_idx += 1
         end
       end
 
@@ -563,35 +755,56 @@ module Tui
         if last_line_idx >= @scroll_y && last_line_idx < @scroll_y + @rect.height
           screen_row = last_line_idx - @scroll_y
           last_line = @rendered_lines[last_line_idx]
-          cursor_x = @rect.x + last_line.size
+          # Calculate actual display width (not character count)
+          display_width = last_line.sum { |(char, _)| Unicode.char_width(char) }
+          cursor_x = @rect.x + display_width
           cursor_y = @rect.y + screen_row
-          if cursor_x < @rect.right && clip.contains?(cursor_x, cursor_y)
+          # Respect scrollbar area
+          max_cursor_x = has_scrollbar ? @rect.right - 1 : @rect.right
+          if cursor_x < max_cursor_x
             buffer.set(cursor_x, cursor_y, @cursor_char, @cursor_style)
           end
         end
       end
 
-      # Draw scrollbar if content exceeds view
+      # Register scrollbar to be drawn AFTER all widgets render
+      # This guarantees the scrollbar won't be overwritten by any content
       if @content_height > @rect.height
-        draw_scrollbar(buffer, clip)
+        register_scrollbar_overlay(buffer)
       end
     end
 
-    private def need_rerender? : Bool
-      # Re-render if width changed since last render, or if last render used default width
-      @rendered_with_default_width || @rect.width != @last_render_width
+    # Register scrollbar drawing as a post-render overlay
+    private def register_scrollbar_overlay(buffer : Buffer) : Nil
+      # Capture the rect and scroll state for the overlay
+      rect = @rect
+      scroll_y = @scroll_y
+      content_height = @content_height
+      max_scroll_val = max_scroll
+
+      Tui.register_scrollbar do |buf, clip|
+        draw_scrollbar_overlay(buf, rect, scroll_y, content_height, max_scroll_val)
+      end
     end
 
-    private def draw_scrollbar(buffer : Buffer, clip : Rect) : Nil
-      return if @rect.height <= 0 || @content_height <= 0
+    # Draw scrollbar (called from overlay system, after all widgets render)
+    private def draw_scrollbar_overlay(buffer : Buffer, rect : Rect, scroll_y : Int32, content_height : Int32, max_scroll_val : Int32) : Nil
+      return if rect.height <= 0 || content_height <= 0
+      return if rect.width <= 1
 
-      scrollbar_x = @rect.right - 1
-      track_height = @rect.height
+      sx = rect.right - 1
+      track_height = rect.height
+
+      return if sx < rect.x || sx >= rect.x + rect.width
+
+      # CRITICAL: Force terminal update for scrollbar column
+      # This ensures no artifacts from previous renders
+      buffer.invalidate_region(sx, rect.y, 1, track_height)
 
       # Calculate thumb position and size
-      thumb_height = (track_height.to_f * @rect.height / @content_height).clamp(1, track_height).to_i
-      thumb_pos = if max_scroll > 0
-                    (@scroll_y.to_f / max_scroll * (track_height - thumb_height)).to_i
+      thumb_height = (track_height.to_f * rect.height / content_height).clamp(1, track_height).to_i
+      thumb_pos = if max_scroll_val > 0
+                    (scroll_y.to_f / max_scroll_val * (track_height - thumb_height)).to_i
                   else
                     0
                   end
@@ -600,11 +813,94 @@ module Tui
       thumb_style = Style.new(fg: Color.palette(244))
 
       track_height.times do |i|
-        y = @rect.y + i
-        char = (i >= thumb_pos && i < thumb_pos + thumb_height) ? '█' : '░'
-        style = (i >= thumb_pos && i < thumb_pos + thumb_height) ? thumb_style : track_style
-        buffer.set(scrollbar_x, y, char, style) if clip.contains?(scrollbar_x, y)
+        y = rect.y + i
+        is_thumb = i >= thumb_pos && i < thumb_pos + thumb_height
+        char = is_thumb ? '█' : '░'
+        style = is_thumb ? thumb_style : track_style
+        buffer.set(sx, y, char, style)
       end
+    end
+
+    private def need_rerender? : Bool
+      # Re-render if width changed since last render, or if last render used default width
+      @rendered_with_default_width || @rect.width != @last_render_width
+    end
+
+    # Check if scrollbar is visible
+    private def has_scrollbar? : Bool
+      @content_height > @rect.height
+    end
+
+    # Get scrollbar X position
+    private def scrollbar_x : Int32
+      @rect.right - 1
+    end
+
+    # Check if coordinates are on the scrollbar
+    # Allow ±1 tolerance to handle terminal coordinate system differences
+    private def on_scrollbar?(x : Int32, y : Int32) : Bool
+      return false unless has_scrollbar?
+      return false unless y >= @rect.y && y < @rect.bottom
+      sx = scrollbar_x
+      x >= sx && x <= sx + 1  # Check scrollbar position and one to the right
+    end
+
+    # Get scrollbar thumb position and height
+    private def scrollbar_thumb_info : {pos: Int32, height: Int32}
+      track_height = @rect.height
+      thumb_height = (track_height.to_f * @rect.height / @content_height).clamp(1, track_height).to_i
+      thumb_pos = if max_scroll > 0
+                    (@scroll_y.to_f / max_scroll * (track_height - thumb_height)).to_i
+                  else
+                    0
+                  end
+      {pos: thumb_pos, height: thumb_height}
+    end
+
+    # Handle scrollbar click - returns true if handled
+    private def handle_scrollbar_click(screen_y : Int32) : Bool
+      return false unless has_scrollbar?
+
+      rel_y = screen_y - @rect.y
+      thumb = scrollbar_thumb_info
+
+      if rel_y < thumb[:pos]
+        # Click above thumb - page up
+        page_up
+      elsif rel_y >= thumb[:pos] + thumb[:height]
+        # Click below thumb - page down
+        page_down
+      else
+        # Click on thumb - start drag
+        @scrollbar_dragging = true
+        @scrollbar_drag_start_y = screen_y
+        @scrollbar_drag_start_scroll = @scroll_y
+      end
+
+      mark_dirty!
+      true
+    end
+
+    # Handle scrollbar drag
+    private def handle_scrollbar_drag(screen_y : Int32) : Bool
+      return false unless @scrollbar_dragging
+
+      track_height = @rect.height
+      thumb = scrollbar_thumb_info
+
+      # Calculate scroll delta based on mouse movement
+      delta_y = screen_y - @scrollbar_drag_start_y
+
+      # Map pixel delta to scroll delta
+      scrollable_track = track_height - thumb[:height]
+      if scrollable_track > 0
+        scroll_per_pixel = max_scroll.to_f / scrollable_track
+        new_scroll = (@scrollbar_drag_start_scroll + delta_y * scroll_per_pixel).to_i
+        @scroll_y = new_scroll.clamp(0, max_scroll)
+        mark_dirty!
+      end
+
+      true
     end
 
     def handle_event(event : Event) : Bool
@@ -650,6 +946,20 @@ module Tui
           return true
         end
 
+        # Ctrl+C / Cmd+C to copy selection
+        if event.matches?("ctrl+c") && @has_selection
+          copy_selection_to_clipboard
+          event.stop!
+          return true
+        end
+
+        # Escape to clear selection
+        if event.key.escape? && @has_selection
+          clear_selection
+          event.stop!
+          return true
+        end
+
       when MouseEvent
         if event.button.wheel_up?
           scroll_up(3)
@@ -660,20 +970,71 @@ module Tui
           event.stop!
           return true
         elsif event.action.press? && event.button.left?
-          # Check for click on details header
+          # Check for scrollbar click first (classic TUI behavior)
+          if on_scrollbar?(event.x, event.y)
+            handle_scrollbar_click(event.y)
+            event.stop!
+            return true
+          end
+
           if event.in_rect?(@rect)
-            # Convert screen Y to content line
+            # Check for click on details header first
             screen_y = event.y - @rect.y
             content_line = @scroll_y + screen_y
 
-            # Check if this line is a details header
+            header_clicked = false
             @details_regions.each do |(region, details_id)|
               if region.y == content_line
                 toggle_details(details_id)
                 event.stop!
-                return true
+                header_clicked = true
+                break
               end
             end
+            return true if header_clicked
+
+            # Start text selection
+            @selection_start = screen_to_content_pos(event.x, event.y)
+            @selection_end = @selection_start
+            @selecting = true
+            @has_selection = false  # No selection until drag
+            mark_dirty!
+            event.stop!
+            return true
+          end
+        elsif event.action.drag? && event.button.left?
+          # Handle scrollbar drag first
+          if @scrollbar_dragging
+            handle_scrollbar_drag(event.y)
+            event.stop!
+            return true
+          end
+
+          # Continue text selection
+          if @selecting && event.in_rect?(@rect)
+            @selection_end = screen_to_content_pos(event.x, event.y)
+            @has_selection = !(@selection_start == @selection_end)
+            mark_dirty!
+            event.stop!
+            return true
+          end
+        elsif event.action.release? && event.button.left?
+          # End scrollbar drag
+          if @scrollbar_dragging
+            @scrollbar_dragging = false
+            event.stop!
+            return true
+          end
+
+          # Finish text selection
+          if @selecting
+            @selecting = false
+            if @has_selection
+              # Auto-copy to clipboard on selection complete
+              copy_selection_to_clipboard
+            end
+            event.stop!
+            return true
           end
         end
       end

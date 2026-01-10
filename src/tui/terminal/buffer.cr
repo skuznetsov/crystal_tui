@@ -191,10 +191,22 @@ module Tui
           if cell.continuation?
             # If previous was also continuation, skip (terminal fills these)
             if prev_cell.continuation?
+              @prev_cells[idx] = cell
               next
             end
-            # Previous was not continuation, but now it is - need to output space to clear
-            # (This happens when a wide char replaces a narrow one, continuation appears)
+            # Previous was NOT continuation, but now it IS - need to output space to clear
+            # (This happens when a wide char replaces a narrow one at position x+1)
+            # Move cursor and output a space to clear the ghost character
+            if y != last_y || x != (last_x + 1)
+              s << ANSI.move(x, y)
+            end
+            if last_style != cell.style
+              s << cell.style.to_ansi
+              last_style = cell.style
+            end
+            s << ' '  # Output space to clear the old character
+            last_x = x
+            last_y = y
             @prev_cells[idx] = cell
             next
           elsif prev_cell.continuation? && !cell.continuation?
@@ -242,6 +254,21 @@ module Tui
         @width.times do |x|
           idx = index(x, y)
           @dirty.add({x, y})
+          @prev_cells[idx] = Cell.new('\0')
+        end
+      end
+    end
+
+    # Force redraw of a specific region
+    def invalidate_region(x : Int32, y : Int32, width : Int32, height : Int32) : Nil
+      height.times do |dy|
+        py = y + dy
+        next unless py >= 0 && py < @height
+        width.times do |dx|
+          px = x + dx
+          next unless px >= 0 && px < @width
+          idx = index(px, py)
+          @dirty.add({px, py})
           @prev_cells[idx] = Cell.new('\0')
         end
       end

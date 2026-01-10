@@ -12,6 +12,21 @@ module Tui
   # Module-level overlay storage (shared across all App subclasses)
   class_getter overlays : Array(OverlayRenderer) = [] of OverlayRenderer
   class_property current_app : App? = nil
+
+  # Scrollbar overlay registry - drawn after all widgets, before regular overlays
+  # This ensures scrollbars are never overwritten by content
+  # Cleared each frame before render, widgets register during their render
+  class_getter scrollbar_overlays : Array(OverlayRenderer) = [] of OverlayRenderer
+
+  # Clear scrollbar overlays (called at start of each frame)
+  def self.clear_scrollbar_overlays : Nil
+    @@scrollbar_overlays.clear
+  end
+
+  # Register a scrollbar to be drawn at end of frame
+  def self.register_scrollbar(&block : Buffer, Rect -> Nil) : Nil
+    @@scrollbar_overlays << block
+  end
   class_property theme : Theme = Theme::Dark
 
   # Dev mode - enables hot reload and debug features
@@ -283,6 +298,9 @@ module Tui
     private def render_all : Nil
       @buffer.clear
 
+      # Clear scrollbar registry - widgets will register during this frame's render
+      Tui.clear_scrollbar_overlays
+
       # Render all visible children sorted by z_index (lower first, higher on top)
       clip = @rect
       @children.sort_by(&.z_index).each do |child|
@@ -293,8 +311,13 @@ module Tui
         end
       end
 
-      # Render overlays LAST (on top of everything, with full screen clip)
+      # Render scrollbar overlays AFTER all widgets (guarantees scrollbars on top of content)
       full_clip = @rect
+      Tui.scrollbar_overlays.each do |scrollbar|
+        scrollbar.call(@buffer, full_clip)
+      end
+
+      # Render overlays LAST (on top of everything, with full screen clip)
       Tui.overlays.each do |overlay|
         overlay.call(@buffer, full_clip)
       end
@@ -312,11 +335,18 @@ module Tui
     def render(buffer : Buffer, clip : Rect) : Nil
       # Render children (for headless testing via harness)
       # When running normally, render_all is used instead
+      Tui.clear_scrollbar_overlays
+
       @children.sort_by(&.z_index).each do |child|
         next unless child.visible?
         if child_clip = clip.intersect(child.render_rect)
           child.render(buffer, child_clip)
         end
+      end
+
+      # Render scrollbar overlays after all widgets
+      Tui.scrollbar_overlays.each do |scrollbar|
+        scrollbar.call(buffer, clip)
       end
 
       # Render overlays

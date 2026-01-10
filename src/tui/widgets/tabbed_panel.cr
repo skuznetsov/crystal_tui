@@ -179,6 +179,9 @@ module Tui
       # Calculate content area (excluding tab bars)
       content_rect = calculate_content_rect
 
+      # CRITICAL: Invalidate tab bar regions to prevent corruption
+      invalidate_tab_bars(buffer)
+
       # Draw tab bars on each position (without overflow menu yet)
       @positions.each do |pos|
         case pos
@@ -247,6 +250,24 @@ module Tui
     private def tab_bar_width : Int32
       # Width for vertical tabs: max label length (truncated) + padding
       @vertical_tab_height.clamp(3, 10)
+    end
+
+    # Force redraw of tab bar regions to prevent corruption
+    private def invalidate_tab_bars(buffer : Buffer) : Nil
+      return if @rect.empty?
+
+      @positions.each do |pos|
+        case pos
+        when .top?
+          buffer.invalidate_region(@rect.x, @rect.y, @rect.width, 1)
+        when .bottom?
+          buffer.invalidate_region(@rect.x, @rect.bottom - 1, @rect.width, 1)
+        when .left?
+          buffer.invalidate_region(@rect.x, @rect.y, tab_bar_width + 1, @rect.height)
+        when .right?
+          buffer.invalidate_region(@rect.right - tab_bar_width - 1, @rect.y, tab_bar_width + 1, @rect.height)
+        end
+      end
     end
 
     private def draw_horizontal_tabs(buffer : Buffer, clip : Rect, top : Bool, draw_overflow : Bool = true) : Nil

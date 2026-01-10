@@ -104,6 +104,13 @@ module Tui
 
       style = Style.new(fg: @border_color)
 
+      # CRITICAL: Invalidate border and splitter regions to prevent corruption
+      # Same "nuclear option" as MarkdownView - forces terminal update
+      if @show_border
+        invalidate_border_regions(buffer)
+      end
+      invalidate_splitter_region(buffer)
+
       if @show_border
         # Draw outer border
         draw_outer_border(buffer, clip, style)
@@ -432,6 +439,33 @@ module Tui
         end
       end
       nil
+    end
+
+    # Force redraw of border regions to prevent corruption
+    private def invalidate_border_regions(buffer : Buffer) : Nil
+      x, y, w, h = @rect.x, @rect.y, @rect.width, @rect.height
+      return if w <= 0 || h <= 0
+
+      # Top edge
+      buffer.invalidate_region(x, y, w, 1)
+      # Bottom edge
+      buffer.invalidate_region(x, y + h - 1, w, 1) if h > 1
+      # Left edge (excluding corners already done)
+      buffer.invalidate_region(x, y + 1, 1, h - 2) if h > 2
+      # Right edge (excluding corners already done)
+      buffer.invalidate_region(x + w - 1, y + 1, 1, h - 2) if w > 1 && h > 2
+    end
+
+    # Force redraw of splitter region to prevent corruption
+    private def invalidate_splitter_region(buffer : Buffer) : Nil
+      case @direction
+      when .horizontal?
+        # Vertical splitter line
+        buffer.invalidate_region(@splitter_pos, @rect.y, 1, @rect.height)
+      when .vertical?
+        # Horizontal splitter line
+        buffer.invalidate_region(@rect.x, @splitter_pos, @rect.width, 1)
+      end
     end
 
     private def render_child(child : Widget?, area : Rect, buffer : Buffer, clip : Rect) : Nil
