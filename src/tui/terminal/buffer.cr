@@ -194,19 +194,22 @@ module Tui
               @prev_cells[idx] = cell
               next
             end
-            # Previous was NOT continuation, but now it IS - need to output space to clear
-            # (This happens when a wide char replaces a narrow one at position x+1)
-            # Move cursor and output a space to clear the ghost character
-            if y != last_y || x != (last_x + 1)
-              s << ANSI.move(x, y)
+            # Previous was NOT continuation, but now it IS
+            # Only need to output space if previous had actual content (not empty space)
+            # Otherwise the wide char's cursor advance already handled it
+            if prev_cell.char != ' ' || prev_cell.wide?
+              # Previous had content - need to output space to clear the ghost character
+              if y != last_y || x != (last_x + 1)
+                s << ANSI.move(x, y)
+              end
+              if last_style != cell.style
+                s << cell.style.to_ansi
+                last_style = cell.style
+              end
+              s << ' '  # Output space to clear the old character
+              last_x = x
+              last_y = y
             end
-            if last_style != cell.style
-              s << cell.style.to_ansi
-              last_style = cell.style
-            end
-            s << ' '  # Output space to clear the old character
-            last_x = x
-            last_y = y
             @prev_cells[idx] = cell
             next
           elsif prev_cell.continuation? && !cell.continuation?
