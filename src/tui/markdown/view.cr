@@ -520,13 +520,16 @@ module Tui
         line_idx = @scroll_y + screen_row
         y = @rect.y + screen_row
 
-        # Clear entire line first if we have explicit background (prevents ghosting from wide chars)
-        if clear_bg && !clear_bg.default?
-          clear_style = Style.new(fg: @text_style.fg, bg: clear_bg)
-          @rect.width.times do |col|
-            px = @rect.x + col
-            buffer.set(px, y, ' ', clear_style) if clip.contains?(px, y)
-          end
+        # ALWAYS clear entire line first to prevent ghosting from shorter content
+        # Use explicit background if set, otherwise use default style
+        clear_style = if clear_bg && !clear_bg.default?
+                        Style.new(fg: @text_style.fg, bg: clear_bg)
+                      else
+                        Style.default
+                      end
+        @rect.width.times do |col|
+          px = @rect.x + col
+          buffer.set(px, y, ' ', clear_style) if clip.contains?(px, y)
         end
 
         # Skip if past content
