@@ -615,17 +615,18 @@ module Tui
     private def handle_key(event : KeyEvent) : Bool
       shift = event.modifiers.shift?
       ctrl = event.modifiers.ctrl?
+      alt = event.modifiers.alt?
 
       case event.key
       when .left?
-        if ctrl
+        if ctrl || alt
           move_word_left(shift)
         else
           move_left(shift)
         end
         true
       when .right?
-        if ctrl
+        if ctrl || alt
           move_word_right(shift)
         else
           move_right(shift)

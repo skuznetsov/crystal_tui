@@ -140,12 +140,23 @@ module Tui
     end
 
     private def handle_key(event : KeyEvent) : Bool
+      alt = event.modifiers.alt?
+      ctrl = event.modifiers.ctrl?
+
       case event.key
       when .left?
-        move_cursor(-1)
+        if alt || ctrl
+          move_word_left
+        else
+          move_cursor(-1)
+        end
         true
       when .right?
-        move_cursor(1)
+        if alt || ctrl
+          move_word_right
+        else
+          move_cursor(1)
+        end
         true
       when .home?
         @cursor = 0
@@ -178,6 +189,32 @@ module Tui
 
     private def move_cursor(delta : Int32) : Nil
       @cursor = (@cursor + delta).clamp(0, @value.size)
+      mark_dirty!
+    end
+
+    private def move_word_left : Nil
+      return if @cursor == 0
+      # Skip whitespace first
+      while @cursor > 0 && @value[@cursor - 1].whitespace?
+        @cursor -= 1
+      end
+      # Then skip word characters
+      while @cursor > 0 && !@value[@cursor - 1].whitespace?
+        @cursor -= 1
+      end
+      mark_dirty!
+    end
+
+    private def move_word_right : Nil
+      return if @cursor >= @value.size
+      # Skip word characters first
+      while @cursor < @value.size && !@value[@cursor].whitespace?
+        @cursor += 1
+      end
+      # Then skip whitespace
+      while @cursor < @value.size && @value[@cursor].whitespace?
+        @cursor += 1
+      end
       mark_dirty!
     end
 
