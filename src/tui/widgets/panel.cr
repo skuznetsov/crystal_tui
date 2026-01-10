@@ -209,24 +209,31 @@ module Tui
           display_title = truncate_title(@title, available)
           full_title = "#{decor_left}#{display_title}#{decor_right}"
 
+          full_title_width = Unicode.display_width(full_title)
           title_start = case @title_align
                         when .left?   then left_corner
-                        when .center? then (@rect.width - full_title.size) // 2
-                        when .right?  then @rect.width - full_title.size - right_corner
+                        when .center? then (@rect.width - full_title_width) // 2
+                        when .right?  then @rect.width - full_title_width - right_corner
                         else               left_corner
                         end
-          title_end = title_start + full_title.size
+          title_end = title_start + full_title_width
 
-          # Draw full title with decorations
-          full_title.each_char_with_index do |char, i|
-            x = @rect.x + title_start + i
+          # Draw full title with decorations (track display position for wide chars)
+          decor_left_width = Unicode.display_width(decor_left)
+          display_title_width = Unicode.display_width(display_title)
+          current_x = @rect.x + title_start
+          char_pos = 0  # Cumulative display position
+          full_title.each_char do |char|
             # Use border color for brackets, title color for text
-            char_style = if @title_decor.brackets? && (i < decor_left.size || i >= decor_left.size + display_title.size)
+            char_style = if @title_decor.brackets? && (char_pos < decor_left_width || char_pos >= decor_left_width + display_title_width)
                            style  # Border style for brackets
                          else
                            title_style
                          end
-            draw_if_visible(buffer, clip, x, @rect.y, char, char_style)
+            char_width = Unicode.char_width(char)
+            draw_if_visible(buffer, clip, current_x, @rect.y, char, char_style)
+            current_x += char_width
+            char_pos += char_width
           end
         end
 
@@ -308,22 +315,55 @@ module Tui
       buffer.set(x, y, char, style) if clip.contains?(x, y)
     end
 
-    private def truncate_title(text : String, max_len : Int32) : String
-      return text if text.size <= max_len
-      return "…" if max_len <= 1
+    private def truncate_title(text : String, max_width : Int32) : String
+      text_width = Unicode.display_width(text)
+      return text if text_width <= max_width
+      return "…" if max_width <= 1
 
+      # Use Unicode.truncate for proper width-aware truncation
       case @title_truncate
       when .end?
-        text[0, max_len - 1] + "…"
+        Unicode.truncate(text, max_width, "…")
       when .center?
-        left_len = (max_len - 1) // 2
-        right_len = max_len - 1 - left_len
-        text[0, left_len] + "…" + text[-(right_len)..]
+        # For center truncation, take half from each side
+        left_width = (max_width - 1) // 2
+        right_width = max_width - 1 - left_width
+        left_part = truncate_to_width(text, left_width)
+        right_part = truncate_from_end(text, right_width)
+        "#{left_part}…#{right_part}"
       when .start?
-        "…" + text[-(max_len - 1)..]
+        "…" + truncate_from_end(text, max_width - 1)
       else
-        text[0, max_len - 1] + "…"
+        Unicode.truncate(text, max_width, "…")
       end
+    end
+
+    # Helper: truncate text to fit width (from start)
+    private def truncate_to_width(text : String, max_width : Int32) : String
+      result = String.build do |s|
+        width = 0
+        text.each_char do |c|
+          char_w = Unicode.char_width(c)
+          break if width + char_w > max_width
+          s << c
+          width += char_w
+        end
+      end
+      result
+    end
+
+    # Helper: take chars from end to fit width
+    private def truncate_from_end(text : String, max_width : Int32) : String
+      chars = text.chars.reverse
+      result_chars = [] of Char
+      width = 0
+      chars.each do |c|
+        char_w = Unicode.char_width(c)
+        break if width + char_w > max_width
+        result_chars.unshift(c)
+        width += char_w
+      end
+      result_chars.join
     end
 
     # Override to handle Panel-specific CSS properties

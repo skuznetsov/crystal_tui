@@ -148,13 +148,19 @@ module Tui
       # Prepare center text if enabled
       display_text = ""
       text_start = 0
+      text_width = 0
       if @show_center_text
         # Use center_text or fall back to percentage
         display_text = @center_text.empty? ? "#{pct.to_i}%" : @center_text
+        text_width = Unicode.display_width(display_text)
         # Center the text in the bar
-        text_start = (bar_width - display_text.size) // 2
+        text_start = (bar_width - text_width) // 2
         text_start = 0 if text_start < 0
       end
+
+      # Build character array with positions for Unicode-aware rendering
+      # For simple ASCII text, we can use simple approach; for Unicode, track positions
+      text_chars = display_text.chars if @show_center_text
 
       # Draw bar
       bar_width.times do |i|
@@ -164,8 +170,10 @@ module Tui
         char = if @show_center_text
                  # Show text character or space with bg color
                  text_pos = i - text_start
-                 if text_pos >= 0 && text_pos < display_text.size
-                   display_text[text_pos]
+                 if text_pos >= 0 && text_pos < text_width && text_chars
+                   # Find character at display position
+                   char_at_pos = find_char_at_display_pos(text_chars, text_pos)
+                   char_at_pos || ' '
                  else
                    ' '
                  end
@@ -233,6 +241,19 @@ module Tui
       # Draw spinner
       spinner = SPINNER_FRAMES[@spinner_frame]
       buffer.set(x, y, spinner, style) if clip.contains?(x, y)
+    end
+
+    # Find character at a given display position (accounting for wide chars)
+    private def find_char_at_display_pos(chars : Array(Char), display_pos : Int32) : Char?
+      current_pos = 0
+      chars.each do |c|
+        char_width = Unicode.char_width(c)
+        if display_pos >= current_pos && display_pos < current_pos + char_width
+          return c
+        end
+        current_pos += char_width
+      end
+      nil
     end
   end
 end

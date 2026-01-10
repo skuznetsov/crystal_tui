@@ -199,17 +199,24 @@ module Tui
     private def draw_title(buffer : Buffer, clip : Rect, border, style : Style, title_style : Style, cr : Rect) : Nil
       return if @title.empty?
 
-      max_len = cr.width - 6
-      display_title = @title.size > max_len ? @title[0, max_len - 1] + "…" : @title
+      max_width = cr.width - 6
+      display_title = Unicode.truncate(@title, max_width, "…")
       full_title = "#{border[:tl_title]} #{display_title} #{border[:tr_title]}"
 
       # Center title
-      title_start = (cr.width - full_title.size) // 2
+      full_title_width = Unicode.display_width(full_title)
+      title_start = (cr.width - full_title_width) // 2
       x = cr.x + title_start
 
-      full_title.each_char_with_index do |char, i|
-        char_style = (i == 0 || i == full_title.size - 1) ? style : title_style
-        draw_char(buffer, clip, x + i, cr.y, char, char_style)
+      # Draw with proper width tracking
+      current_x = x
+      char_pos = 0
+      full_title.each_char do |char|
+        char_style = (char_pos == 0 || char_pos >= full_title_width - 1) ? style : title_style
+        char_width = Unicode.char_width(char)
+        draw_char(buffer, clip, current_x, cr.y, char, char_style)
+        current_x += char_width
+        char_pos += char_width
       end
     end
 
