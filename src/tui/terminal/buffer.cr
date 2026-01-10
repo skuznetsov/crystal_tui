@@ -184,10 +184,23 @@ module Tui
           # Skip if unchanged from previous frame
           next if @prev_cells[idx] == cell
 
-          # Skip continuation cells (terminal fills these automatically)
+          # Handle continuation cells
+          # Skip if both current and previous are continuation (nothing to output)
+          # But if previous was NOT continuation and current IS, or vice versa, output needed
+          prev_cell = @prev_cells[idx]
           if cell.continuation?
+            # If previous was also continuation, skip (terminal fills these)
+            if prev_cell.continuation?
+              next
+            end
+            # Previous was not continuation, but now it is - need to output space to clear
+            # (This happens when a wide char replaces a narrow one, continuation appears)
             @prev_cells[idx] = cell
             next
+          elsif prev_cell.continuation? && !cell.continuation?
+            # Previous was continuation, now it's not - need to output the new cell
+            # This clears the "ghost" from the old wide character
+            # Fall through to output the cell
           end
 
           # Move cursor if not sequential
