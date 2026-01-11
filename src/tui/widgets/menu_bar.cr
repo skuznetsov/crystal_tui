@@ -58,7 +58,7 @@ module Tui
       menu = @menus[@active_menu]
       return @rect if menu.items.empty?
 
-      dropdown_height = menu.items.size + 2  # +1 for bottom border, +1 for shadow
+      dropdown_height = menu.items.size + 3  # +1 for top border, +1 for bottom border, +1 for shadow
       dropdown_width = menu.items.max_of { |item| item.separator ? 1 : item.label.size } + 6  # +4 for padding, +2 for shadow
 
       # Expand rect to include dropdown
@@ -175,17 +175,23 @@ module Tui
       width = menu.items.max_of { |item| item.separator ? 1 : item.label.size } + 4
       height = menu.items.size
 
-      # Draw shadow
-      draw_shadow(buffer, clip, x, y, width, height)
+      # Draw shadow (account for top border)
+      draw_shadow(buffer, clip, x, y, width, height + 1)
 
       # Draw dropdown background
       dropdown_style = Style.new(fg: @dropdown_fg, bg: @dropdown_bg)
       active_item_style = Style.new(fg: @dropdown_active_fg, bg: @dropdown_active_bg)
       hotkey_item_style = Style.new(fg: @dropdown_hotkey, bg: @dropdown_bg)
 
+      # Draw top border (MC-style)
+      width.times do |dx|
+        char = dx == 0 ? '┌' : (dx == width - 1 ? '┐' : '─')
+        buffer.set(x + dx, y, char, dropdown_style) if clip.contains?(x + dx, y)
+      end
+
       menu.items.each_with_index do |item, i|
         is_active = i == @active_item
-        row_y = y + i
+        row_y = y + 1 + i  # +1 for top border
 
         if item.separator
           # Draw separator line
@@ -222,7 +228,7 @@ module Tui
       end
 
       # Draw bottom border
-      bottom_y = y + height
+      bottom_y = y + 1 + height  # +1 for top border
       width.times do |dx|
         char = dx == 0 ? '└' : (dx == width - 1 ? '┘' : '─')
         buffer.set(x + dx, bottom_y, char, dropdown_style) if clip.contains?(x + dx, bottom_y)
@@ -350,7 +356,7 @@ module Tui
 
             # Check if click is within dropdown
             if event.x >= dropdown_x && event.x < dropdown_x + dropdown_width
-              item_index = event.y - dropdown_y
+              item_index = event.y - dropdown_y - 1  # -1 for top border
               if item_index >= 0 && item_index < menu.items.size
                 item = menu.items[item_index]
                 unless item.separator
