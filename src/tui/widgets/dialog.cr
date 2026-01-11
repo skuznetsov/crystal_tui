@@ -385,8 +385,8 @@ module Tui
         end
       end
 
-      # Check for resize start on border/corners
-      if @resizable && event.action.press?
+      # Check for resize start on border/corners (any click, not just press)
+      if @resizable && (event.action.press? || event.button.left?)
         edge = detect_resize_edge(event.x, event.y, cr)
         if edge != ResizeEdge::None
           @resizing = edge
@@ -398,8 +398,8 @@ module Tui
         end
       end
 
-      # Check button clicks
-      if event.action.press? && event.in_rect?(cr)
+      # Check button clicks - only for actual button area, not entire dialog
+      if event.action.press? && event.button.left?
         btn_y = cr.bottom - 2
         if event.y == btn_y && !@buttons.empty?
           # Calculate button positions
@@ -418,46 +418,43 @@ module Tui
             x = label_end + 2
           end
         end
-        event.stop!
-        return true
+        # Don't consume all clicks - let subclasses handle them
       end
 
       false
     end
 
     # Detect which edge/corner the mouse is on for resize
+    # Uses 1-cell tolerance for easier targeting
     private def detect_resize_edge(mx : Int32, my : Int32, cr : Rect) : ResizeEdge
+      # Check if on border (exact match for single-cell borders)
       on_top = my == cr.y
       on_bottom = my == cr.bottom - 1
       on_left = mx == cr.x
       on_right = mx == cr.right - 1
 
-      in_x_range = mx >= cr.x && mx < cr.right
-      in_y_range = my >= cr.y && my < cr.bottom
+      # Must be on at least one edge to be a resize target
+      return ResizeEdge::None unless on_top || on_bottom || on_left || on_right
 
-      return ResizeEdge::None unless in_x_range || in_y_range
+      # Corners: within 2 cells of corner on the border
+      near_left = mx <= cr.x + 2
+      near_right = mx >= cr.right - 3
 
-      # Corners (2 cells from corner)
-      near_left = mx <= cr.x + 1
-      near_right = mx >= cr.right - 2
-      near_top = my == cr.y
-      near_bottom = my == cr.bottom - 1
-
-      if near_top && near_left
+      if on_top && near_left
         ResizeEdge::TopLeft
-      elsif near_top && near_right
+      elsif on_top && near_right
         ResizeEdge::TopRight
-      elsif near_bottom && near_left
+      elsif on_bottom && near_left
         ResizeEdge::BottomLeft
-      elsif near_bottom && near_right
+      elsif on_bottom && near_right
         ResizeEdge::BottomRight
-      elsif on_top && in_x_range
+      elsif on_top
         ResizeEdge::Top
-      elsif on_bottom && in_x_range
+      elsif on_bottom
         ResizeEdge::Bottom
-      elsif on_left && in_y_range
+      elsif on_left
         ResizeEdge::Left
-      elsif on_right && in_y_range
+      elsif on_right
         ResizeEdge::Right
       else
         ResizeEdge::None
