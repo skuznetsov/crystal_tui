@@ -7,6 +7,18 @@ module Tui
       Cancel
     end
 
+    enum ResizeEdge
+      None
+      Top
+      Bottom
+      Left
+      Right
+      TopLeft
+      TopRight
+      BottomLeft
+      BottomRight
+    end
+
     struct Button
       property label : String
       property result : Result
@@ -22,6 +34,17 @@ module Tui
     @input : Input?
     @focused_button : Int32 = 0
     @result : Result = Result::None
+
+    # Resize state
+    @resizing : ResizeEdge = ResizeEdge::None
+    @resize_start_x : Int32 = 0
+    @resize_start_y : Int32 = 0
+    @resize_start_rect : Rect = Rect.new(0, 0, 0, 0)
+
+    # Resize settings
+    property resizable : Bool = true
+    property min_width : Int32 = 20
+    property min_height : Int32 = 6
 
     # Style - MC dialog colors (classic gray dialogs)
     property border_style : Panel::BorderStyle = Panel::BorderStyle::Light
@@ -302,6 +325,9 @@ module Tui
       return false unless focused?
 
       case event
+      when MouseEvent
+        return handle_mouse(event)
+
       when KeyEvent
         # If input is present and focused, let it handle first
         if input = @input
@@ -337,6 +363,159 @@ module Tui
       end
 
       false
+    end
+
+    private def handle_mouse(event : MouseEvent) : Bool
+      cr = content_rect
+
+      # Handle resize drag
+      if @resizing != ResizeEdge::None
+        if event.action.drag? || event.action.press?
+          apply_resize(event.x, event.y)
+          event.stop!
+          return true
+        elsif event.action.release?
+          @resizing = ResizeEdge::None
+          event.stop!
+          return true
+        end
+      end
+
+      # Check for resize start on border/corners
+      if @resizable && event.action.press?
+        edge = detect_resize_edge(event.x, event.y, cr)
+        if edge != ResizeEdge::None
+          @resizing = edge
+          @resize_start_x = event.x
+          @resize_start_y = event.y
+          @resize_start_rect = @rect
+          event.stop!
+          return true
+        end
+      end
+
+      # Check button clicks
+      if event.action.press? && event.in_rect?(cr)
+        btn_y = cr.bottom - 2
+        if event.y == btn_y && !@buttons.empty?
+          # Calculate button positions
+          labels = @buttons.map { |b| b.label }
+          total_width = labels.sum(&.size) + (@buttons.size - 1) * 2
+          btn_x = cr.x + (cr.width - total_width) // 2
+
+          x = btn_x
+          @buttons.each_with_index do |button, i|
+            label_end = x + labels[i].size
+            if event.x >= x && event.x < label_end
+              close_with(button.result)
+              event.stop!
+              return true
+            end
+            x = label_end + 2
+          end
+        end
+        event.stop!
+        return true
+      end
+
+      false
+    end
+
+    # Detect which edge/corner the mouse is on for resize
+    private def detect_resize_edge(mx : Int32, my : Int32, cr : Rect) : ResizeEdge
+      on_top = my == cr.y
+      on_bottom = my == cr.bottom - 1
+      on_left = mx == cr.x
+      on_right = mx == cr.right - 1
+
+      in_x_range = mx >= cr.x && mx < cr.right
+      in_y_range = my >= cr.y && my < cr.bottom
+
+      return ResizeEdge::None unless in_x_range || in_y_range
+
+      # Corners (2 cells from corner)
+      near_left = mx <= cr.x + 1
+      near_right = mx >= cr.right - 2
+      near_top = my == cr.y
+      near_bottom = my == cr.bottom - 1
+
+      if near_top && near_left
+        ResizeEdge::TopLeft
+      elsif near_top && near_right
+        ResizeEdge::TopRight
+      elsif near_bottom && near_left
+        ResizeEdge::BottomLeft
+      elsif near_bottom && near_right
+        ResizeEdge::BottomRight
+      elsif on_top && in_x_range
+        ResizeEdge::Top
+      elsif on_bottom && in_x_range
+        ResizeEdge::Bottom
+      elsif on_left && in_y_range
+        ResizeEdge::Left
+      elsif on_right && in_y_range
+        ResizeEdge::Right
+      else
+        ResizeEdge::None
+      end
+    end
+
+    # Apply resize based on current drag position
+    private def apply_resize(mx : Int32, my : Int32) : Nil
+      dx = mx - @resize_start_x
+      dy = my - @resize_start_y
+      r = @resize_start_rect
+
+      new_x = r.x
+      new_y = r.y
+      new_w = r.width
+      new_h = r.height
+
+      case @resizing
+      when .top?
+        new_y = r.y + dy
+        new_h = r.height - dy
+      when .bottom?
+        new_h = r.height + dy
+      when .left?
+        new_x = r.x + dx
+        new_w = r.width - dx
+      when .right?
+        new_w = r.width + dx
+      when .top_left?
+        new_x = r.x + dx
+        new_y = r.y + dy
+        new_w = r.width - dx
+        new_h = r.height - dy
+      when .top_right?
+        new_y = r.y + dy
+        new_w = r.width + dx
+        new_h = r.height - dy
+      when .bottom_left?
+        new_x = r.x + dx
+        new_w = r.width - dx
+        new_h = r.height + dy
+      when .bottom_right?
+        new_w = r.width + dx
+        new_h = r.height + dy
+      end
+
+      # Enforce minimum size
+      if new_w < @min_width
+        if @resizing.left? || @resizing.top_left? || @resizing.bottom_left?
+          new_x = r.x + r.width - @min_width
+        end
+        new_w = @min_width
+      end
+      if new_h < @min_height
+        if @resizing.top? || @resizing.top_left? || @resizing.top_right?
+          new_y = r.y + r.height - @min_height
+        end
+        new_h = @min_height
+      end
+
+      @rect = Rect.new(new_x, new_y, new_w, new_h)
+      mark_dirty!
     end
 
     private def handle_key(event : KeyEvent) : Bool
