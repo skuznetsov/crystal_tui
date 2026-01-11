@@ -45,7 +45,13 @@ module Tui
 
     # Scroll
     @scroll_y : Int32 = 0
+    @scroll_x : Int32 = 0
     @content_height : Int32 = 0
+    @content_width : Int32 = 0  # Maximum line width for horizontal scroll
+
+    # Horizontal scroll settings
+    property? horizontal_scroll_enabled : Bool = true  # Allow horizontal scrolling
+    property horizontal_scroll_step : Int32 = 8       # Pixels to scroll per keypress
 
     # Parsed content
     @document : Markdown::Document = [] of Markdown::Block
@@ -325,6 +331,35 @@ module Tui
       mark_dirty!
     end
 
+    # Horizontal scrolling
+    def scroll_left(cols : Int32 = -1) : Nil
+      cols = @horizontal_scroll_step if cols < 0
+      @scroll_x = (@scroll_x - cols).clamp(0, max_scroll_x)
+      mark_dirty!
+    end
+
+    def scroll_right(cols : Int32 = -1) : Nil
+      cols = @horizontal_scroll_step if cols < 0
+      @scroll_x = (@scroll_x + cols).clamp(0, max_scroll_x)
+      mark_dirty!
+    end
+
+    def scroll_to_left : Nil
+      @scroll_x = 0
+      mark_dirty!
+    end
+
+    def scroll_to_right : Nil
+      @scroll_x = max_scroll_x
+      mark_dirty!
+    end
+
+    private def max_scroll_x : Int32
+      has_v_scrollbar = @content_height > @rect.height
+      viewport_width = has_v_scrollbar ? @rect.width - 1 : @rect.width
+      (@content_width - viewport_width).clamp(0, Int32::MAX)
+    end
+
     def scroll_to_top : Nil
       @scroll_y = 0
       mark_dirty!
@@ -407,6 +442,9 @@ module Tui
       end
 
       @content_height = @rendered_lines.size
+
+      # Calculate max content width for horizontal scrolling
+      @content_width = @rendered_lines.max_of? { |line| line.sum { |(text, _)| Unicode.grapheme_width(text) } } || 0
     end
 
     private def add_blank_line : Nil
@@ -634,8 +672,8 @@ module Tui
       # │ cell │ cell │ = 1 + (col_width + 3) * cols
       total_width = 1 + col_widths.sum { |w| w + 3 }
 
-      # Scale down if too wide
-      if total_width > max_width && col_widths.size > 0
+      # Scale down if too wide ONLY when horizontal scroll is disabled
+      if !@horizontal_scroll_enabled && total_width > max_width && col_widths.size > 0
         scale = (max_width - 1).to_f / (total_width - 1)
         col_widths = col_widths.map { |w| (w * scale).to_i.clamp(3, w) }
       end
@@ -721,11 +759,20 @@ module Tui
       # Determine background: explicit @background > @text_style.bg > nil (parent controls)
       clear_bg = @background || @text_style.bg
 
-      # Render visible lines with proper clearing
-      visible_lines = @rect.height
-      has_scrollbar = @content_height > @rect.height
+      # Check scrollbar requirements
+      has_v_scrollbar = @content_height > @rect.height
+      has_h_scrollbar = @horizontal_scroll_enabled && @content_width > @rect.width
 
-      visible_lines.times do |screen_row|
+      # Calculate visible area (reduce for scrollbars)
+      visible_height = has_h_scrollbar ? @rect.height - 1 : @rect.height
+      content_width = has_v_scrollbar ? @rect.width - 1 : @rect.width
+
+      # Clamp scroll positions
+      max_scroll_x = (@content_width - content_width).clamp(0, Int32::MAX)
+      @scroll_x = @scroll_x.clamp(0, max_scroll_x)
+
+      # Render visible lines with proper clearing
+      visible_height.times do |screen_row|
         line_idx = @scroll_y + screen_row
         y = @rect.y + screen_row
 
@@ -746,65 +793,114 @@ module Tui
 
         line = @rendered_lines[line_idx]
 
-        # Content is pre-rendered at correct width (minus scrollbar space)
-        # Just need to render characters tracking display width for wide chars
-        # content_width excludes scrollbar column when scrollbar present
-        content_width = has_scrollbar ? @rect.width - 1 : @rect.width
-
-        display_col = 0
+        # Render with horizontal scroll offset
+        virtual_col = 0  # Position in virtual content
+        screen_col = 0   # Position on screen
         char_idx = 0
+
         line.each do |(text, style)|
           char_w = Unicode.grapheme_width(text)
 
-          # Stop if we've reached the content edge (before scrollbar)
-          # Also check if a wide character would overflow into scrollbar column
-          break if display_col >= content_width
-          break if display_col + char_w > content_width && char_w > 1
+          # Check if this character is visible (after scroll offset)
+          if virtual_col + char_w > @scroll_x && screen_col < content_width
+            # Calculate screen position accounting for scroll
+            visible_start = (virtual_col - @scroll_x).clamp(0, Int32::MAX)
 
-          x = @rect.x + display_col
-          if clip.contains?(x, y)
-            # Apply view's background to style if needed
-            final_style = with_background(style)
+            # Only render if within viewport
+            if visible_start < content_width
+              x = @rect.x + visible_start
+              if clip.contains?(x, y)
+                # Apply view's background to style if needed
+                final_style = with_background(style)
 
-            # Apply selection highlight if position is in selection
-            if in_selection?(line_idx, char_idx)
-              final_style = Style.new(fg: final_style.fg, bg: @selection_bg, attrs: final_style.attrs)
+                # Apply selection highlight if position is in selection
+                if in_selection?(line_idx, char_idx)
+                  final_style = Style.new(fg: final_style.fg, bg: @selection_bg, attrs: final_style.attrs)
+                end
+
+                # Check if character fits in viewport
+                if visible_start + char_w <= content_width
+                  buffer.set_wide(x, y, text, final_style)
+                elsif char_w == 1
+                  buffer.set(x, y, text[0], final_style)
+                end
+                # Wide char at edge that doesn't fit is skipped
+              end
+              screen_col = visible_start + char_w
             end
-
-            # Use set_wide to properly handle wide graphemes (emoji, CJK)
-            # This sets both the main cell and continuation cell for width-2 graphemes
-            char_width = buffer.set_wide(x, y, text, final_style)
-            display_col += char_width
-          else
-            # Still advance display_col even if not clipped
-            display_col += char_w
           end
+
+          virtual_col += char_w
           char_idx += 1
+
+          # Stop if we've rendered past the viewport
+          break if screen_col >= content_width && virtual_col > @scroll_x + content_width
         end
       end
 
       # Draw streaming cursor
       if @streaming && !@rendered_lines.empty?
         last_line_idx = @content_height - 1
-        if last_line_idx >= @scroll_y && last_line_idx < @scroll_y + @rect.height
+        if last_line_idx >= @scroll_y && last_line_idx < @scroll_y + visible_height
           screen_row = last_line_idx - @scroll_y
           last_line = @rendered_lines[last_line_idx]
           # Calculate actual display width (not character count)
           display_width = last_line.sum { |(text, _)| Unicode.grapheme_width(text) }
-          cursor_x = @rect.x + display_width
-          cursor_y = @rect.y + screen_row
-          # Respect scrollbar area
-          max_cursor_x = has_scrollbar ? @rect.right - 1 : @rect.right
-          if cursor_x < max_cursor_x
+          cursor_virtual_x = display_width - @scroll_x
+          if cursor_virtual_x >= 0 && cursor_virtual_x < content_width
+            cursor_x = @rect.x + cursor_virtual_x
+            cursor_y = @rect.y + screen_row
             buffer.set(cursor_x, cursor_y, @cursor_char, @cursor_style)
           end
         end
       end
 
-      # Register scrollbar to be drawn AFTER all widgets render
-      # This guarantees the scrollbar won't be overwritten by any content
-      if @content_height > @rect.height
+      # Draw horizontal scrollbar at bottom
+      if has_h_scrollbar
+        draw_horizontal_scrollbar(buffer, clip, content_width, max_scroll_x)
+      end
+
+      # Register vertical scrollbar to be drawn AFTER all widgets render
+      if has_v_scrollbar
         register_scrollbar_overlay(buffer)
+      end
+    end
+
+    # Draw horizontal scrollbar at bottom of view
+    private def draw_horizontal_scrollbar(buffer : Buffer, clip : Rect, viewport_width : Int32, max_scroll : Int32) : Nil
+      return if viewport_width <= 2 || @content_width <= 0
+
+      y = @rect.bottom - 1
+      scrollbar_width = viewport_width
+
+      # Calculate thumb size and position
+      visible_ratio = viewport_width.to_f / @content_width
+      thumb_size = (scrollbar_width * visible_ratio).to_i.clamp(2, scrollbar_width)
+      scroll_ratio = max_scroll > 0 ? @scroll_x.to_f / max_scroll : 0.0
+      thumb_pos = ((scrollbar_width - thumb_size) * scroll_ratio).to_i
+
+      # Draw scrollbar track and thumb
+      track_style = Style.new(fg: Color.palette(240), bg: @background || Color.default)
+      thumb_style = Style.new(fg: Color.white, bg: Color.palette(240))
+
+      scrollbar_width.times do |i|
+        x = @rect.x + i
+        next unless clip.contains?(x, y)
+
+        if i >= thumb_pos && i < thumb_pos + thumb_size
+          buffer.set(x, y, '█', thumb_style)
+        else
+          buffer.set(x, y, '─', track_style)
+        end
+      end
+
+      # Draw scroll indicators at edges
+      if @scroll_x > 0
+        buffer.set(@rect.x, y, '◀', Style.new(fg: Color.cyan, bg: @background || Color.default)) if clip.contains?(@rect.x, y)
+      end
+      if @scroll_x < max_scroll
+        end_x = @rect.x + scrollbar_width - 1
+        buffer.set(end_x, y, '▶', Style.new(fg: Color.cyan, bg: @background || Color.default)) if clip.contains?(end_x, y)
       end
     end
 
@@ -951,6 +1047,18 @@ module Tui
           scroll_down
           event.stop!
           return true
+        when .left?
+          if @horizontal_scroll_enabled && @content_width > @rect.width
+            scroll_left
+            event.stop!
+            return true
+          end
+        when .right?
+          if @horizontal_scroll_enabled && @content_width > @rect.width
+            scroll_right
+            event.stop!
+            return true
+          end
         when .page_up?
           page_up
           event.stop!
@@ -961,6 +1069,7 @@ module Tui
           return true
         when .home?
           scroll_to_top
+          scroll_to_left if @horizontal_scroll_enabled
           event.stop!
           return true
         when .end?
@@ -969,13 +1078,21 @@ module Tui
           return true
         end
 
-        # j/k vim-style scrolling
+        # j/k/h/l vim-style scrolling
         if event.char == 'j'
           scroll_down
           event.stop!
           return true
         elsif event.char == 'k'
           scroll_up
+          event.stop!
+          return true
+        elsif event.char == 'h' && @horizontal_scroll_enabled && @content_width > @rect.width
+          scroll_left
+          event.stop!
+          return true
+        elsif event.char == 'l' && @horizontal_scroll_enabled && @content_width > @rect.width
+          scroll_right
           event.stop!
           return true
         end

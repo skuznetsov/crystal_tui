@@ -51,6 +51,7 @@ module Tui
 
     # Colors
     property node_color : Color = Color.white
+    property node_bg : Color = Color.default  # Background for non-selected nodes
     property selected_bg : Color = Color.blue
     property selected_fg : Color = Color.white
     property guide_color : Color = Color.palette(240)
@@ -162,7 +163,8 @@ module Tui
       end
 
       # Expand/collapse icon or leaf icon
-      icon_style = Style.new(fg: @icon_color, bg: selected && focused? ? @selected_bg : Color.default)
+      bg = selected && focused? ? @selected_bg : @node_bg
+      icon_style = Style.new(fg: @icon_color, bg: bg)
       icon = if node.leaf?
                node.icon || @icon_leaf
              elsif node.expanded
@@ -175,7 +177,7 @@ module Tui
       # Label
       label_style = Style.new(
         fg: selected && focused? ? @selected_fg : @node_color,
-        bg: selected && focused? ? @selected_bg : Color.default
+        bg: bg
       )
       label_x = indent_x + 2
       node.label.each_char_with_index do |char, i|
