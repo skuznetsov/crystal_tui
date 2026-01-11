@@ -322,12 +322,16 @@ module Tui
 
     def handle_event(event : Event) : Bool
       return false if event.stopped?
-      return false unless focused?
 
+      # Handle mouse events before focus check (resize should work regardless)
       case event
       when MouseEvent
         return handle_mouse(event)
+      end
 
+      return false unless focused?
+
+      case event
       when KeyEvent
         # If input is present and focused, let it handle first
         if input = @input
