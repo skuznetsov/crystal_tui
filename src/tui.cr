@@ -90,6 +90,7 @@ require "./tui/widgets/color_picker"
 require "./tui/widgets/time_picker"
 require "./tui/widgets/placeholder"
 require "./tui/widgets/pretty"
+require "./tui/widgets/diff_view"
 
 # Markdown
 require "./tui/markdown/parser"
