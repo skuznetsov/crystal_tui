@@ -33,6 +33,8 @@ module Tui
     property tab_fg : Color = Color.black
     property active_tab_bg : Color = Color.white
     property active_tab_fg : Color = Color.black
+    property focused_tab_bg : Color = Color.yellow  # Background when panel is focused
+    property focused_tab_fg : Color = Color.black   # Foreground when panel is focused
     property content_bg : Color = Color.blue
     property content_fg : Color = Color.white
     property border_color : Color = Color.cyan
@@ -272,9 +274,12 @@ module Tui
 
     private def draw_horizontal_tabs(buffer : Buffer, clip : Rect, top : Bool, draw_overflow : Bool = true) : Nil
       y = top ? @rect.y : @rect.bottom - 1
-      style = Style.new(fg: @tab_fg, bg: @tab_bg)
+      # Use focused style when panel is focused
+      bg = focused? ? @focused_tab_bg : @tab_bg
+      fg = focused? ? @focused_tab_fg : @tab_fg
+      style = Style.new(fg: fg, bg: bg)
       active_style = Style.new(fg: @active_tab_fg, bg: @active_tab_bg)
-      chevron_style = Style.new(fg: @tab_fg, bg: @tab_bg, attrs: Attributes::Bold)
+      chevron_style = Style.new(fg: fg, bg: bg, attrs: Attributes::Bold)
 
       # Clear tab bar
       @rect.width.times do |i|
@@ -552,151 +557,174 @@ module Tui
       end
     end
 
-    def handle_event(event : Event) : Bool
-      return false if event.stopped?
-
-      # Mouse events should work regardless of focus
-      # Key events require focus
+    # Handle events using DOM-like capture/bubble model
+    # KeyEvents: handled when TabbedPanel is target (tab bar focused)
+    # MouseEvents: handled when click is on tab bar area
+    # Tab from content bubbles up - parent decides where focus goes
+    def on_event(event : Event) : Bool
       case event
       when KeyEvent
-        return false unless focused?
-        # Handle overflow menu if open
-        if @overflow_open
-          case event.key
-          when .escape?
-            close_overflow
-            event.stop!
-            return true
-          when .up?
-            @overflow_selected = (@overflow_selected - 1).clamp(0, @tabs.size - 1)
-            mark_dirty!
-            event.stop!
-            return true
-          when .down?
-            @overflow_selected = (@overflow_selected + 1).clamp(0, @tabs.size - 1)
-            mark_dirty!
-            event.stop!
-            return true
-          when .enter?
-            self.active_tab = @overflow_selected
-            close_overflow
-            event.stop!
-            return true
-          end
-        end
+        handle_key_event(event)
+      when MouseEvent
+        handle_mouse_event(event)
+      else
+        false
+      end
+    end
 
+    private def handle_key_event(event : KeyEvent) : Bool
+      # Only handle keys when WE are the target (tab bar is focused)
+      # Let Tab bubble up from content - parent handles focus cycling
+      return false unless event.at_target? && focused?
+
+      # Handle overflow menu if open
+      if @overflow_open
         case event.key
-        when .left?
-          prev_tab
-          event.stop!
-          return true
-        when .right?
-          next_tab
-          event.stop!
+        when .escape?
+          close_overflow
+          event.stop_propagation!
           return true
         when .up?
-          if @positions.includes?(TabPosition::Left) || @positions.includes?(TabPosition::Right)
-            prev_tab
-            event.stop!
-            return true
-          end
-        when .down?
-          if @positions.includes?(TabPosition::Left) || @positions.includes?(TabPosition::Right)
-            next_tab
-            event.stop!
-            return true
-          end
-        when .tab?
-          if event.modifiers.shift?
-            prev_tab
-          else
-            next_tab
-          end
-          event.stop!
+          @overflow_selected = (@overflow_selected - 1).clamp(0, @tabs.size - 1)
+          mark_dirty!
+          event.stop_propagation!
           return true
-        else
-          # Number keys 1-9 to switch tabs
-          if char = event.char
-            if char >= '1' && char <= '9'
-              index = char.to_i - 1
-              if index < @tabs.size
-                self.active_tab = index
-                close_overflow
-                event.stop!
-                return true
-              end
-            end
-            # 'o' to open overflow menu
-            if char == 'o' && @enable_overflow && @tabs.size > calculate_visible_tabs(@rect.width - 4)
-              toggle_overflow
-              event.stop!
-              return true
-            end
-          end
-        end
-      when MouseEvent
-        if event.action.press?
-          # Check if click is on overflow chevron
-          if click_on_chevron?(event.x, event.y)
-            toggle_overflow
-            event.stop!
-            return true
-          end
-
-          # Check if click is in overflow menu
-          if @overflow_open
-            if menu_index = overflow_menu_item_at(event.x, event.y)
-              self.active_tab = menu_index
-              close_overflow
-              event.stop!
-              return true
-            else
-              close_overflow
-            end
-          end
-
-          # Check if click is on a tab
-          if tab_index = tab_at(event.x, event.y)
-            self.active_tab = tab_index
-            event.stop!
-            return true
-          end
-        elsif event.action.move?
-          # Hover in overflow menu
-          if @overflow_open
-            if menu_index = overflow_menu_item_at(event.x, event.y)
-              if @overflow_selected != menu_index
-                @overflow_selected = menu_index
-                mark_dirty!
-              end
-            end
-          end
-
-          # Hover detection for tooltips
-          if tab_index = tab_at(event.x, event.y)
-            if @hovered_tab != tab_index
-              @hovered_tab = tab_index
-              @show_tooltip = true
-              mark_dirty!
-            end
-          else
-            if @show_tooltip
-              @show_tooltip = false
-              @hovered_tab = -1
-              mark_dirty!
-            end
-          end
+        when .down?
+          @overflow_selected = (@overflow_selected + 1).clamp(0, @tabs.size - 1)
+          mark_dirty!
+          event.stop_propagation!
+          return true
+        when .enter?
+          self.active_tab = @overflow_selected
+          close_overflow
+          event.stop_propagation!
+          return true
         end
       end
 
-      # Forward events to active content widget
-      if @active_tab >= 0 && @active_tab < @tabs.size
-        if content = @tabs[@active_tab].content
-          return content.handle_event(event)
+      case event.key
+      when .left?
+        prev_tab
+        event.stop_propagation!
+        return true
+      when .right?
+        next_tab
+        event.stop_propagation!
+        return true
+      when .up?
+        if @positions.includes?(TabPosition::Left) || @positions.includes?(TabPosition::Right)
+          prev_tab
+          event.stop_propagation!
+          return true
+        end
+      when .down?
+        if @positions.includes?(TabPosition::Left) || @positions.includes?(TabPosition::Right)
+          next_tab
+          event.stop_propagation!
+          return true
+        end
+      when .enter?
+        # Enter on tab bar = focus content
+        focus_content
+        event.stop_propagation!
+        return true
+      when .tab?
+        # Tab when tab bar focused = switch tabs (Shift+Tab = prev)
+        if event.modifiers.shift?
+          prev_tab
+        else
+          next_tab
+        end
+        event.stop_propagation!
+        return true
+      else
+        # Number keys 1-9 to switch tabs
+        if char = event.char
+          if char >= '1' && char <= '9'
+            index = char.to_i - 1
+            if index < @tabs.size
+              self.active_tab = index
+              close_overflow
+              event.stop_propagation!
+              return true
+            end
+          end
+          # 'o' to open overflow menu
+          if char == 'o' && @enable_overflow && @tabs.size > calculate_visible_tabs(@rect.width - 4)
+            toggle_overflow
+            event.stop_propagation!
+            return true
+          end
         end
       end
 
       false
+    end
+
+    private def handle_mouse_event(event : MouseEvent) : Bool
+      if event.action.press?
+        # Check if click is on overflow chevron
+        if click_on_chevron?(event.x, event.y)
+          toggle_overflow
+          event.stop_propagation!
+          return true
+        end
+
+        # Check if click is in overflow menu
+        if @overflow_open
+          if menu_index = overflow_menu_item_at(event.x, event.y)
+            self.active_tab = menu_index
+            close_overflow
+            event.stop_propagation!
+            return true
+          else
+            close_overflow
+          end
+        end
+
+        # Check if click is on a tab
+        if tab_index = tab_at(event.x, event.y)
+          self.active_tab = tab_index
+          self.focused = true  # Focus tab bar on click
+          event.stop_propagation!
+          return true
+        end
+      elsif event.action.move?
+        # Hover in overflow menu
+        if @overflow_open
+          if menu_index = overflow_menu_item_at(event.x, event.y)
+            if @overflow_selected != menu_index
+              @overflow_selected = menu_index
+              mark_dirty!
+            end
+          end
+        end
+
+        # Hover detection for tooltips
+        if tab_index = tab_at(event.x, event.y)
+          if @hovered_tab != tab_index
+            @hovered_tab = tab_index
+            @show_tooltip = true
+            mark_dirty!
+          end
+        else
+          if @show_tooltip
+            @show_tooltip = false
+            @hovered_tab = -1
+            mark_dirty!
+          end
+        end
+      end
+
+      false
+    end
+
+    # Focus the content of the active tab
+    def focus_content : Nil
+      return unless @active_tab >= 0 && @active_tab < @tabs.size
+      if content = @tabs[@active_tab].content
+        content.focused = true
+      end
     end
 
     private def click_on_chevron?(mx : Int32, my : Int32) : Bool

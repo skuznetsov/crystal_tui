@@ -46,6 +46,18 @@
 - [x] Opacity: `opacity`, `text-opacity`
 - [x] Text wrap: `text-wrap` (wrap, nowrap)
 
+### Recently Added (Phase 5) ✓
+- [x] **DOM-like Event Model** - Capture/bubble phases like web browsers:
+  - [x] `Event::Phase` enum (None, Capture, Target, Bubble)
+  - [x] `on_capture(event)` - Intercept events before children
+  - [x] `on_event(event)` - Handle at target and bubble phases
+  - [x] `event.stop_propagation!` - Stop event from continuing
+  - [x] `event.stop_immediate!` - Stop all further processing
+  - [x] `event.prevent_default!` - Prevent default action
+  - [x] `event.target` / `event.current_target` - Widget references
+  - [x] `event.capturing?` / `event.bubbling?` / `event.at_target?` - Phase checks
+  - [x] Backward compatible with widgets that override `handle_event`
+
 ### Missing (Priority: LOW)
 - [ ] Remaining visual properties:
   - [ ] `tint`, `background-tint`

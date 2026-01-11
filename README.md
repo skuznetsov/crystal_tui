@@ -4,10 +4,10 @@ A modern, Textual-inspired TUI (Terminal User Interface) framework for Crystal.
 
 ## Features
 
-- **Rich Widget Library**: 30+ widgets including Panel, Button, Input, DataTable, Tree, ListView, Log, and more
+- **Rich Widget Library**: 40+ widgets including Panel, Button, Input, DataTable, Tree, ListView, Log, and more
 - **CSS Styling**: Textual-compatible CSS (TCSS) for styling with variables, selectors, and hot reload
 - **Flexible Layout**: Flexbox-like layout engine with fr units, percentages, and constraints
-- **Event System**: Comprehensive keyboard and mouse event handling
+- **DOM-like Event Model**: Capture/bubble phases familiar to web developers
 - **Reactive Properties**: Automatic re-rendering on property changes
 - **Overlay System**: Popups, dialogs, and menus that render above other widgets
 
@@ -170,25 +170,84 @@ end
 
 ## Event Handling
 
+Crystal TUI uses a **DOM-like event model** with capture and bubble phases, familiar to web developers:
+
+```
+CAPTURE (down):  App → Panel → Container → Button
+TARGET:          Button handles the event
+BUBBLE (up):     Button → Container → Panel → App
+```
+
+### Event Phases
+
+1. **Capture Phase** - Event travels from root DOWN to target. Allows parent widgets to intercept events before they reach children.
+2. **Target Phase** - Event is at the target widget (deepest widget for mouse, focused widget for keyboard).
+3. **Bubble Phase** - Event travels from target UP to root. Allows parent widgets to react after children.
+
+### Handling Events
+
+Override `on_event` for target/bubble phase handling (most common):
+
 ```crystal
-class MyApp < Tui::App
-  def handle_event(event : Tui::Event) : Bool
+class MyWidget < Tui::Widget
+  def on_event(event : Tui::Event) : Bool
     case event
     when Tui::KeyEvent
-      if event.matches?("ctrl+s")
-        save_file
-        return true
-      end
-    when Tui::MouseEvent
-      if event.action.click?
-        handle_click(event.x, event.y)
+      if event.key.enter?
+        do_something
+        event.stop_propagation!  # Stop bubble
         return true
       end
     end
-    super
+    false
   end
 end
 ```
+
+Override `on_capture` to intercept events BEFORE they reach children:
+
+```crystal
+class MyApp < Tui::App
+  # Global hotkeys - intercept before any child can handle
+  def on_capture(event : Tui::Event) : Nil
+    if event.is_a?(Tui::KeyEvent)
+      if event.modifiers.ctrl? && event.char == 's'
+        save_document
+        event.stop_propagation!  # Don't send to children
+      elsif event.modifiers.ctrl? && event.char == 'q'
+        quit
+        event.stop_propagation!
+      end
+    end
+  end
+end
+```
+
+### Event Control Methods
+
+```crystal
+# Stop propagation to next widget (current widget's handlers still run)
+event.stop_propagation!
+
+# Stop immediately (no more handlers at all)
+event.stop_immediate!
+
+# Prevent default action (widget-specific behavior)
+event.prevent_default!
+
+# Check event phase
+event.capturing?    # In capture phase?
+event.at_target?    # At target widget?
+event.bubbling?     # In bubble phase?
+
+# Get target/current widget
+event.target          # Original target widget
+event.current_target  # Widget currently handling event
+```
+
+### Legacy Compatibility
+
+Widgets that override `handle_event` directly continue to work with the legacy (depth-first) model. For new widgets, prefer using `on_event` and `on_capture`.
 
 ## Examples
 
