@@ -52,7 +52,7 @@ module Tui
     @raw_markdown : String = ""
 
     # Rendered lines cache
-    @rendered_lines : Array(Array(Tuple(Char, Style))) = [] of Array(Tuple(Char, Style))
+    @rendered_lines : Array(Array(Tuple(String, Style))) = [] of Array(Tuple(String, Style))
     @last_render_width : Int32 = 0
     @rendered_with_default_width : Bool = false
 
@@ -360,6 +360,7 @@ module Tui
       width = full_width > 1 ? full_width - 1 : full_width  # Reserve scrollbar column
       @last_render_width = full_width  # Track full width for change detection
 
+
       @document.each do |block|
         case block.type
         when .heading1?
@@ -409,7 +410,7 @@ module Tui
     end
 
     private def add_blank_line : Nil
-      @rendered_lines << [] of Tuple(Char, Style)
+      @rendered_lines << [] of Tuple(String, Style)
     end
 
     private def render_inline_to_lines(
@@ -419,13 +420,14 @@ module Tui
       prefix : String = "",
       prefix_style : Style? = nil
     ) : Nil
-      line = [] of Tuple(Char, Style)
+      line = [] of Tuple(String, Style)
       display_width = 0  # Track display width, not character count
 
       # Add prefix
-      prefix.each_char do |c|
-        line << {c, prefix_style || base_style}
-        display_width += Unicode.char_width(c)
+      prefix.each_grapheme do |g|
+        grapheme = g.to_s
+        line << {grapheme, prefix_style || base_style}
+        display_width += Unicode.grapheme_width(grapheme)
       end
 
       prefix_display_width = display_width  # Remember prefix width for wrapped lines
@@ -442,22 +444,23 @@ module Tui
                 else                      base_style
                 end
 
-        elem.text.each_char do |c|
-          char_w = Unicode.char_width(c)
+        elem.text.each_grapheme do |g|
+          grapheme = g.to_s
+          char_w = Unicode.grapheme_width(grapheme)
 
-          if c == '\n' || display_width + char_w > width
+          if grapheme == "\n" || display_width + char_w > width
             @rendered_lines << line
-            line = [] of Tuple(Char, Style)
+            line = [] of Tuple(String, Style)
             display_width = 0
             # Continue with same indent for wrapped lines
             prefix_display_width.times do
-              line << {' ', base_style}
+              line << {" ", base_style}
               display_width += 1
             end
           end
 
-          unless c == '\n'
-            line << {c, style}
+          unless grapheme == "\n"
+            line << {grapheme, style}
             display_width += char_w
           end
         end
@@ -468,48 +471,58 @@ module Tui
 
     private def render_code_block(code : String, language : String?, width : Int32) : Nil
       # Top border with language
-      top_line = [] of Tuple(Char, Style)
-      top_line << {'┌', @code_block_border}
+      top_line = [] of Tuple(String, Style)
+      display_width = 0
+      top_line << {"┌", @code_block_border}
+      display_width += 1
       if lang = language
-        top_line << {'─', @code_block_border}
-        top_line << {' ', @code_block_border}
-        lang.each_char { |c| top_line << {c, @code_block_border} }
-        top_line << {' ', @code_block_border}
+        top_line << {"─", @code_block_border}
+        display_width += 1
+        top_line << {" ", @code_block_border}
+        display_width += 1
+        lang.each_grapheme do |g|
+          grapheme = g.to_s
+          top_line << {grapheme, @code_block_border}
+          display_width += Unicode.grapheme_width(grapheme)
+        end
+        top_line << {" ", @code_block_border}
+        display_width += 1
       end
-      remaining = width - top_line.size - 1
-      remaining.times { top_line << {'─', @code_block_border} }
-      top_line << {'┐', @code_block_border}
+      remaining = width - display_width - 1
+      remaining.times { top_line << {"─", @code_block_border} }
+      top_line << {"┐", @code_block_border}
       @rendered_lines << top_line
 
       # Code lines
       code.lines.each do |code_line|
-        line = [] of Tuple(Char, Style)
-        line << {'│', @code_block_border}
-        line << {' ', @code_block_style}
+        line = [] of Tuple(String, Style)
+        line << {"│", @code_block_border}
+        line << {" ", @code_block_style}
 
         # Track display width (not character count) for proper alignment
         display_width = 2  # │ + space
-        code_line.each_char do |c|
-          char_w = Unicode.char_width(c)
+        code_line.each_grapheme do |g|
+          grapheme = g.to_s
+          char_w = Unicode.grapheme_width(grapheme)
           break if display_width + char_w > width - 2  # Leave room for space + │
-          line << {c, @code_block_style}
+          line << {grapheme, @code_block_style}
           display_width += char_w
         end
 
         # Pad to width using display width
         while display_width < width - 1
-          line << {' ', @code_block_style}
+          line << {" ", @code_block_style}
           display_width += 1
         end
-        line << {'│', @code_block_border}
+        line << {"│", @code_block_border}
         @rendered_lines << line
       end
 
       # Bottom border
-      bottom_line = [] of Tuple(Char, Style)
-      bottom_line << {'└', @code_block_border}
-      (width - 2).times { bottom_line << {'─', @code_block_border} }
-      bottom_line << {'┘', @code_block_border}
+      bottom_line = [] of Tuple(String, Style)
+      bottom_line << {"└", @code_block_border}
+      (width - 2).times { bottom_line << {"─", @code_block_border} }
+      bottom_line << {"┘", @code_block_border}
       @rendered_lines << bottom_line
     end
 
@@ -524,8 +537,8 @@ module Tui
     end
 
     private def render_hr(width : Int32) : Nil
-      line = [] of Tuple(Char, Style)
-      width.times { line << {'─', @hr_style} }
+      line = [] of Tuple(String, Style)
+      width.times { line << {"─", @hr_style} }
       @rendered_lines << line
     end
 
@@ -538,13 +551,18 @@ module Tui
       header_line_idx = @rendered_lines.size
 
       # Render header: ▶ Summary (or ▼ Summary if expanded)
-      header_line = [] of Tuple(Char, Style)
+      header_line = [] of Tuple(String, Style)
       toggle_char = is_expanded ? @details_expanded_char : @details_collapsed_char
-      header_line << {toggle_char, @details_header_style}
-      header_line << {' ', @details_header_style}
-      summary.each_char do |c|
-        break if header_line.size >= width
-        header_line << {c, @details_header_style}
+      toggle_text = toggle_char.to_s
+      header_line << {toggle_text, @details_header_style}
+      header_line << {" ", @details_header_style}
+      header_width = Unicode.grapheme_width(toggle_text) + 1
+      summary.each_grapheme do |g|
+        grapheme = g.to_s
+        char_w = Unicode.grapheme_width(grapheme)
+        break if header_width + char_w > width
+        header_line << {grapheme, @details_header_style}
+        header_width += char_w
       end
       @rendered_lines << header_line
 
@@ -556,14 +574,22 @@ module Tui
       if is_expanded && (content = block.details_content)
         # Parse and render content as sub-document
         content.lines.each do |content_line|
-          line = [] of Tuple(Char, Style)
-          line << {' ', @details_content_style}
-          line << {' ', @details_content_style}
-          line << {'│', Style.new(fg: Color.palette(240))}
-          line << {' ', @details_content_style}
-          content_line.each_char do |c|
-            break if line.size >= width
-            line << {c, @details_content_style}
+          line = [] of Tuple(String, Style)
+          display_width = 0
+          line << {" ", @details_content_style}
+          display_width += 1
+          line << {" ", @details_content_style}
+          display_width += 1
+          line << {"│", Style.new(fg: Color.palette(240))}
+          display_width += 1
+          line << {" ", @details_content_style}
+          display_width += 1
+          content_line.each_grapheme do |g|
+            grapheme = g.to_s
+            char_w = Unicode.grapheme_width(grapheme)
+            break if display_width + char_w > width
+            line << {grapheme, @details_content_style}
+            display_width += char_w
           end
           @rendered_lines << line
         end
@@ -619,8 +645,8 @@ module Tui
 
       rows.each_with_index do |row, row_idx|
         # Content row
-        line = [] of Tuple(Char, Style)
-        line << {'│', @table_border_style}
+        line = [] of Tuple(String, Style)
+        line << {"│", @table_border_style}
 
         row.cells.each_with_index do |cell, col_idx|
           col_w = col_widths[col_idx]? || 10
@@ -628,24 +654,12 @@ module Tui
 
           # Render cell content
           text = cell.elements.map(&.text).join
-          text = text[0, col_w] if text.size > col_w
+          padded = pad_table_text(text, col_w, cell.align)
 
-          # Apply alignment
-          padded = case cell.align
-                   when :center
-                     pad_left = (col_w - text.size) // 2
-                     pad_right = col_w - text.size - pad_left
-                     " " * pad_left + text + " " * pad_right
-                   when :right
-                     text.rjust(col_w)
-                   else
-                     text.ljust(col_w)
-                   end
-
-          line << {' ', style}
-          padded.each_char { |c| line << {c, style} }
-          line << {' ', style}
-          line << {'│', @table_border_style}
+          line << {" ", style}
+          padded.each_grapheme { |g| line << {g.to_s, style} }
+          line << {" ", style}
+          line << {"│", @table_border_style}
         end
 
         @rendered_lines << line
@@ -660,13 +674,32 @@ module Tui
       render_table_border(col_widths, '└', '┴', '┘', '─')
     end
 
+    private def pad_table_text(text : String, width : Int32, align : Symbol) : String
+      return "" if width <= 0
+
+      truncated = Unicode.truncate(text, width, "")
+      text_width = Unicode.display_width(truncated)
+      padding = (width - text_width).clamp(0, width)
+
+      case align
+      when :center
+        left = padding // 2
+        right = padding - left
+        (" " * left) + truncated + (" " * right)
+      when :right
+        (" " * padding) + truncated
+      else
+        truncated + (" " * padding)
+      end
+    end
+
     private def render_table_border(col_widths : Array(Int32), left : Char, mid : Char, right : Char, fill : Char) : Nil
-      line = [] of Tuple(Char, Style)
-      line << {left, @table_border_style}
+      line = [] of Tuple(String, Style)
+      line << {left.to_s, @table_border_style}
 
       col_widths.each_with_index do |w, i|
-        (w + 2).times { line << {fill, @table_border_style} }
-        line << {(i < col_widths.size - 1 ? mid : right), @table_border_style}
+        (w + 2).times { line << {fill.to_s, @table_border_style} }
+        line << {(i < col_widths.size - 1 ? mid : right).to_s, @table_border_style}
       end
 
       @rendered_lines << line
@@ -717,10 +750,11 @@ module Tui
         # Just need to render characters tracking display width for wide chars
         # content_width excludes scrollbar column when scrollbar present
         content_width = has_scrollbar ? @rect.width - 1 : @rect.width
+
         display_col = 0
         char_idx = 0
-        line.each do |(char, style)|
-          char_w = Unicode.char_width(char)
+        line.each do |(text, style)|
+          char_w = Unicode.grapheme_width(text)
 
           # Stop if we've reached the content edge (before scrollbar)
           # Also check if a wide character would overflow into scrollbar column
@@ -737,9 +771,9 @@ module Tui
               final_style = Style.new(fg: final_style.fg, bg: @selection_bg, attrs: final_style.attrs)
             end
 
-            # Use set_wide to properly handle wide characters (emoji, CJK)
-            # This sets both the main cell and continuation cell for width-2 chars
-            char_width = buffer.set_wide(x, y, char, final_style)
+            # Use set_wide to properly handle wide graphemes (emoji, CJK)
+            # This sets both the main cell and continuation cell for width-2 graphemes
+            char_width = buffer.set_wide(x, y, text, final_style)
             display_col += char_width
           else
             # Still advance display_col even if not clipped
@@ -756,7 +790,7 @@ module Tui
           screen_row = last_line_idx - @scroll_y
           last_line = @rendered_lines[last_line_idx]
           # Calculate actual display width (not character count)
-          display_width = last_line.sum { |(char, _)| Unicode.char_width(char) }
+          display_width = last_line.sum { |(text, _)| Unicode.grapheme_width(text) }
           cursor_x = @rect.x + display_width
           cursor_y = @rect.y + screen_row
           # Respect scrollbar area

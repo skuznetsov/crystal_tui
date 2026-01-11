@@ -381,7 +381,7 @@ module Tui
       end
 
       private def cell_text_width(cell : TableCell) : Int32
-        cell.elements.sum { |e| e.text.size }
+        cell.elements.sum { |e| Unicode.display_width(e.text) }
       end
 
       private def parse_paragraph : Block

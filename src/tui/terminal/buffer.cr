@@ -20,30 +20,111 @@ module Tui
       return unless in_bounds?(x, y)
 
       idx = index(x, y)
+      old_cell = @cells[idx]
+
+      # DEBUG
+      if ENV["DEBUG_WIDE"]? && (old_cell.continuation? || old_cell.wide? || cell.wide? || cell.continuation?)
+        File.open("/tmp/wide_debug.log", "a") do |f|
+          f.puts "set(#{x},#{y}): old=#{old_cell.glyph.inspect}(w=#{old_cell.wide?},c=#{old_cell.continuation?}) new=#{cell.glyph.inspect}(w=#{cell.wide?},c=#{cell.continuation?})"
+        end
+      end
+
+      # CRITICAL: If overwriting a continuation cell with a non-continuation cell,
+      # we need to invalidate the wide character at x-1 to prevent rendering corruption.
+      # This happens when widgets do x += 1 instead of x += char_width after wide chars.
+      if old_cell.continuation? && !cell.continuation? && x > 0
+        prev_idx = index(x - 1, y)
+        prev_cell = @cells[prev_idx]
+        if ENV["DEBUG_WIDE"]?
+          File.open("/tmp/wide_debug.log", "a") do |f|
+            f.puts "  -> overwriting continuation! prev_cell at #{x-1}: #{prev_cell.glyph.inspect}(w=#{prev_cell.wide?})"
+          end
+        end
+        if prev_cell.wide?
+          # Convert the wide char to a space to prevent ghost artifacts
+          @cells[prev_idx] = Cell.new(' ', prev_cell.style)
+          @dirty.add({x - 1, y})
+          if ENV["DEBUG_WIDE"]?
+            File.open("/tmp/wide_debug.log", "a") do |f|
+              f.puts "  -> FIXED: replaced wide char at #{x-1} with space"
+            end
+          end
+        end
+      end
+
+      # Also handle: if setting a wide char, clear any continuation at x+1 first
+      # (in case there was a previous wide char there)
+      if cell.wide? && in_bounds?(x + 1, y)
+        next_idx = index(x + 1, y)
+        next_cell = @cells[next_idx]
+        if next_cell.continuation?
+          # The next position will be overwritten by our continuation anyway
+          # but mark it dirty to ensure proper update
+          @dirty.add({x + 1, y})
+        end
+      end
+
       if @cells[idx] != cell
         @cells[idx] = cell
         @dirty.add({x, y})
       end
     end
 
-    # Set a cell with char and style
-    def set(x : Int32, y : Int32, char : Char, style : Style = Style.default) : Nil
-      set(x, y, Cell.new(char, style))
-    end
-
-    # Set a wide character (handles 2-cell characters like emoji/CJK)
-    def set_wide(x : Int32, y : Int32, char : Char, style : Style = Style.default) : Int32
+    # Set a cell with char and style (auto-detects wide characters)
+    # Returns the display width of the character (1 or 2)
+    def set(x : Int32, y : Int32, char : Char, style : Style = Style.default) : Int32
       width = Unicode.char_width(char)
+      return 0 if width == 0
       if width == 2
+        unless in_bounds?(x + 1, y)
+          if ENV["DEBUG_WIDE"]?
+            File.open("/tmp/wide_debug.log", "a") do |f|
+              f.puts "wide_overflow(#{x},#{y}): #{char.inspect} width=2 buffer=#{@width}x#{@height}"
+            end
+          end
+          return 0
+        end
         # Wide character: set main cell and continuation
         set(x, y, Cell.new(char, style, wide: true, continuation: false))
         set(x + 1, y, Cell.continuation(style))
-        2
       else
-        # Normal character
+        # Normal or zero-width character
         set(x, y, Cell.new(char, style))
-        width
       end
+      width
+    end
+
+    # Set a cell with grapheme and style (auto-detects wide graphemes)
+    # Returns the display width of the grapheme (1 or 2)
+    def set(x : Int32, y : Int32, text : String, style : Style = Style.default) : Int32
+      width = Unicode.grapheme_width(text)
+      return 0 if width == 0
+      if width == 2
+        unless in_bounds?(x + 1, y)
+          if ENV["DEBUG_WIDE"]?
+            File.open("/tmp/wide_debug.log", "a") do |f|
+              f.puts "wide_overflow(#{x},#{y}): #{text.inspect} width=2 buffer=#{@width}x#{@height}"
+            end
+          end
+          return 0
+        end
+        set(x, y, Cell.text(text, style, wide: true))
+        set(x + 1, y, Cell.continuation(style))
+      else
+        set(x, y, Cell.text(text, style))
+      end
+      width
+    end
+
+    # Set a wide character (handles 2-cell characters like emoji/CJK)
+    # Note: set(x, y, char, style) now auto-detects wide chars, so this is
+    # mainly for explicit use or backwards compatibility
+    def set_wide(x : Int32, y : Int32, char : Char, style : Style = Style.default) : Int32
+      set(x, y, char, style)
+    end
+
+    def set_wide(x : Int32, y : Int32, text : String, style : Style = Style.default) : Int32
+      set(x, y, text, style)
     end
 
     # Get a cell at position
@@ -69,8 +150,8 @@ module Tui
     # Draw a string at position (with Unicode width support)
     def draw_string(x : Int32, y : Int32, text : String, style : Style = Style.default) : Int32
       current_x = x
-      text.each_char do |char|
-        width = set_wide(current_x, y, char, style)
+      text.each_grapheme do |grapheme|
+        width = set_wide(current_x, y, grapheme.to_s, style)
         current_x += width
       end
       current_x - x  # Return total width drawn
@@ -185,31 +266,10 @@ module Tui
           next if @prev_cells[idx] == cell
 
           # Handle continuation cells
-          # Skip if both current and previous are continuation (nothing to output)
-          # But if previous was NOT continuation and current IS, or vice versa, output needed
+          # Never output continuation cells; the leading wide glyph already occupies this column.
+          # Clearing is handled by updating the leading cell when needed.
           prev_cell = @prev_cells[idx]
           if cell.continuation?
-            # If previous was also continuation, skip (terminal fills these)
-            if prev_cell.continuation?
-              @prev_cells[idx] = cell
-              next
-            end
-            # Previous was NOT continuation, but now it IS
-            # Only need to output space if previous had actual content (not empty space)
-            # Otherwise the wide char's cursor advance already handled it
-            if prev_cell.char != ' ' || prev_cell.wide?
-              # Previous had content - need to output space to clear the ghost character
-              if y != last_y || x != (last_x + 1)
-                s << ANSI.move(x, y)
-              end
-              if last_style != cell.style
-                s << cell.style.to_ansi
-                last_style = cell.style
-              end
-              s << ' '  # Output space to clear the old character
-              last_x = x
-              last_y = y
-            end
             @prev_cells[idx] = cell
             next
           elsif prev_cell.continuation? && !cell.continuation?
@@ -234,7 +294,15 @@ module Tui
             last_style = cell.style
           end
 
-          s << cell.char
+          s << (cell.text.empty? ? cell.char : cell.text)
+
+          # CRITICAL: After outputting a wide character, explicitly position cursor
+          # to the expected next position. This fixes terminals that render CJK/emoji
+          # as width 1 when our tables say width 2 (font fallback issues).
+          if cell.wide?
+            # Cursor should be at x+2 after a wide char
+            s << ANSI.move(x + 2, y)
+          end
 
           last_x = x
           last_y = y
@@ -281,7 +349,8 @@ module Tui
     def to_s(io : IO) : Nil
       @height.times do |y|
         @width.times do |x|
-          io << @cells[index(x, y)].char
+          cell = @cells[index(x, y)]
+          io << (cell.text.empty? ? cell.char : cell.text)
         end
         io << '\n' if y < @height - 1
       end
@@ -301,7 +370,7 @@ module Tui
               s << cell.style.to_ansi
               last_style = cell.style
             end
-            s << cell.char
+            s << (cell.text.empty? ? cell.char : cell.text)
           end
           s << ANSI.reset << '\n'
           last_style = nil
@@ -323,7 +392,7 @@ module Tui
             cell = @cells[index(x, y)]
             # Skip continuation cells - wide chars already occupy 2 terminal columns
             next if cell.continuation?
-            s << cell.char
+            s << (cell.text.empty? ? cell.char : cell.text)
           end
         end.rstrip
       end
@@ -340,7 +409,7 @@ module Tui
               cell = @cells[index(x, y)]
               # Skip continuation cells - wide chars already occupy 2 terminal columns
               next if cell.continuation?
-              rs << cell.char
+              rs << (cell.text.empty? ? cell.char : cell.text)
             end
           end
           stripped = row.rstrip

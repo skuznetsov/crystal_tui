@@ -1,6 +1,12 @@
 # Unicode display width utilities
 # Based on wcwidth (https://github.com/jquast/wcwidth) and Unicode Standard Annex #11
 # Tables from Unicode 15.0
+require "string/grapheme"
+lib LibC
+  alias WCharT = Int32
+  fun wcwidth(c : WCharT) : Int32
+end
+
 module Tui
   module Unicode
     # Zero-width character ranges (combining marks, control chars, format chars)
@@ -335,11 +341,6 @@ module Tui
       {0x23E9, 0x23F3},   # Various symbols
       {0x23F8, 0x23FA},
       {0x25FD, 0x25FE},   # Squares
-      # Miscellaneous Symbols (0x2600-0x26FF) - Modern terminals render as 2-wide
-      # Note: wcwidth considers these "ambiguous", but iTerm2/Terminal.app use 2-wide
-      {0x2600, 0x26FF},   # Misc Symbols (includes ⚠, ☀, ☁, ☑, ♠, ♥, etc.)
-      # Dingbats (0x2700-0x27BF) - Modern terminals render as 2-wide
-      {0x2700, 0x27BF},   # Dingbats (includes ✅, ✔, ✗, ✓, etc.)
       {0x2934, 0x2935},   # Arrows
       {0x2B05, 0x2B07},   # Arrows
       {0x2B1B, 0x2B1C},   # Squares
@@ -416,6 +417,7 @@ module Tui
       {0x1F6D0, 0x1F6D2},
       {0x1F6D5, 0x1F6D7},
       {0x1F6DC, 0x1F6DF},
+      {0x1F6E0, 0x1F6EA},   # Transport symbols (🛠🛡🛢🛣🛤🛥🛩🛫🛬 etc.)
       {0x1F6EB, 0x1F6EC},
       {0x1F6F4, 0x1F6FC},
       {0x1F7E0, 0x1F7EB},
@@ -434,6 +436,12 @@ module Tui
       {0x1FAF0, 0x1FAF8},
       {0x20000, 0x2FFFD},  # CJK Extension B-F
       {0x30000, 0x3FFFD},  # CJK Extension G
+    ]
+
+    # Emoji-like symbols that many terminals render as wide even when wcwidth reports 1.
+    # This avoids right-edge overflow in modern terminals (iTerm2, kitty, wezterm).
+    EMOJI_WIDE = [
+      {0x2600, 0x27BF},   # Misc symbols + Dingbats
     ]
 
     # Binary search in sorted ranges
@@ -468,16 +476,42 @@ module Tui
       # Zero-width characters (combining marks, format chars, etc.)
       return 0 if in_ranges?(codepoint, ZERO_WIDTH)
 
+      sys_width = LibC.wcwidth(codepoint)
+      if sys_width >= 0
+        # Override when terminals render emoji/symbols as wide but wcwidth reports 1.
+        if sys_width == 1 && (in_ranges?(codepoint, WIDE_CHARS) || in_ranges?(codepoint, EMOJI_WIDE))
+          return 2
+        end
+        return sys_width
+      end
+
       # Wide characters (CJK, emoji, etc.)
-      return 2 if in_ranges?(codepoint, WIDE_CHARS)
+      return 2 if in_ranges?(codepoint, WIDE_CHARS) || in_ranges?(codepoint, EMOJI_WIDE)
 
       # Default: 1 width (printable ASCII, Latin, Greek, Cyrillic, etc.)
       1
     end
 
+    # Get display width of a grapheme cluster (string)
+    def self.grapheme_width(grapheme : String) : Int32
+      return 0 if grapheme.empty?
+
+      max_width = 0
+      has_vs16 = false
+
+      grapheme.each_char do |c|
+        has_vs16 ||= c.ord == 0xFE0F
+        w = char_width(c)
+        max_width = w if w > max_width
+      end
+
+      return 2 if max_width == 1 && has_vs16
+      max_width
+    end
+
     # Get display width of a string
     def self.display_width(text : String) : Int32
-      text.each_char.sum { |c| char_width(c) }
+      text.each_grapheme.sum { |g| grapheme_width(g.to_s) }
     end
 
     # Truncate string to fit display width, adding suffix if truncated
@@ -490,10 +524,11 @@ module Tui
       target_width = max_width - suffix_width
       result = String.build do |s|
         current_width = 0
-        text.each_char do |c|
-          char_w = char_width(c)
+        text.each_grapheme do |g|
+          grapheme = g.to_s
+          char_w = grapheme_width(grapheme)
           break if current_width + char_w > target_width
-          s << c
+          s << grapheme
           current_width += char_w
         end
         s << suffix

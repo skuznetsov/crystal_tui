@@ -189,8 +189,9 @@ module Tui
     property style : Style
     property? wide : Bool          # True if this is a wide (2-column) character
     property? continuation : Bool  # True if this is the right half of a wide char
+    property text : String         # Full grapheme (optional, defaults to char)
 
-    def initialize(@char : Char = ' ', @style : Style = Style.default, @wide : Bool = false, @continuation : Bool = false)
+    def initialize(@char : Char = ' ', @style : Style = Style.default, @wide : Bool = false, @continuation : Bool = false, @text : String = "")
     end
 
     def self.empty : Cell
@@ -201,13 +202,23 @@ module Tui
       new(' ', Style.new(bg: Color.transparent))
     end
 
+    def self.text(text : String, style : Style = Style.default, wide : Bool = false) : Cell
+      return new(' ', style, wide: wide, continuation: false, text: "") if text.empty?
+      new(text[0], style, wide: wide, continuation: false, text: text)
+    end
+
     # Continuation cell (right half of wide char)
     def self.continuation(style : Style = Style.default) : Cell
       new(' ', style, wide: false, continuation: true)
     end
 
     def ==(other : Cell) : Bool
-      @char == other.char && @style == other.style && @wide == other.wide? && @continuation == other.continuation?
+      @char == other.char && @style == other.style && @wide == other.wide? &&
+        @continuation == other.continuation? && @text == other.text
+    end
+
+    def glyph : String
+      @text.empty? ? @char.to_s : @text
     end
 
     def transparent_bg? : Bool
@@ -222,7 +233,10 @@ module Tui
           fg: @style.fg.dimmed,
           bg: @style.bg.dimmed,
           attrs: @style.attrs | Attributes::Dim
-        )
+        ),
+        @wide,
+        @continuation,
+        @text
       )
     end
   end

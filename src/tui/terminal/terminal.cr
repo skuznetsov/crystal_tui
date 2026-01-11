@@ -5,6 +5,19 @@ module Tui::Terminal
   @@initialized : Bool = false
   @@original_blocking : Bool = true
 
+  # Width corrections from runtime calibration
+  # Maps codepoint -> actual_terminal_width
+  @@width_corrections = {} of Int32 => Int32
+
+  # Test characters for width calibration
+  CALIBRATION_CHARS = [
+    '缺',  # CJK U+7F3A - common problematic character
+    '漢',  # CJK U+6F22
+    '⚠',   # Warning sign U+26A0
+    '→',   # Arrow U+2192
+    '★',   # Star U+2605
+  ]
+
   # Initialize terminal for TUI mode
   def init : Nil
     return if @@initialized

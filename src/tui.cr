@@ -10,6 +10,8 @@
 # - Fiber-based async
 # - Compile-time type safety
 
+require "string/grapheme"
+
 # Core
 require "./tui/borders"
 require "./tui/terminal/ansi"

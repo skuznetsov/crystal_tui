@@ -98,11 +98,8 @@ module Tui
           break if x >= @rect.x + @rect.width  # Stop if we'd overflow
 
           if clip.contains?(x, text_y)
+            # buffer.set now auto-handles wide chars (sets continuation cell)
             buffer.set(x, text_y, char, @style)
-            # Wide characters: fill second cell with space to prevent artifacts
-            if char_width == 2 && clip.contains?(x + 1, text_y)
-              buffer.set(x + 1, text_y, ' ', @style)
-            end
           end
 
           display_pos += char_width
