@@ -129,12 +129,13 @@ module Tui
       is_active = index == @active_index
       is_hovered = index == @hovered_index
 
+      # For non-active items, merge fg color with sidebar bg to ensure emoji bg matches
       style = if is_active
                 @active_style
               elsif is_hovered
-                @hover_style
+                Style.new(fg: @hover_style.fg, bg: @bg_style.bg, attrs: @hover_style.attrs)
               else
-                @icon_style
+                Style.new(fg: @icon_style.fg, bg: @bg_style.bg, attrs: @icon_style.attrs)
               end
 
       # Draw active indicator (left edge)
