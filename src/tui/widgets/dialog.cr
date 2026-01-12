@@ -41,8 +41,15 @@ module Tui
     @resize_start_y : Int32 = 0
     @resize_start_rect : Rect = Rect.new(0, 0, 0, 0)
 
-    # Resize settings
+    # Drag state (for moving window by title bar)
+    @dragging : Bool = false
+    @drag_start_x : Int32 = 0
+    @drag_start_y : Int32 = 0
+    @drag_start_rect : Rect = Rect.new(0, 0, 0, 0)
+
+    # Resize/drag settings
     property resizable : Bool = true
+    property draggable : Bool = true
     property min_width : Int32 = 20
     property min_height : Int32 = 6
 
@@ -385,14 +392,39 @@ module Tui
         end
       end
 
-      # Check for resize start on border/corners (any click, not just press)
-      if @resizable && (event.action.press? || event.button.left?)
+      # Handle window drag (moving by title bar)
+      if @dragging
+        if event.action.drag? || event.action.press?
+          apply_drag(event.x, event.y)
+          event.stop!
+          return true
+        elsif event.action.release?
+          @dragging = false
+          event.stop!
+          return true
+        end
+      end
+
+      # Check for resize start on border/corners - only on mouse press
+      if @resizable && event.action.press? && event.button.left?
         edge = detect_resize_edge(event.x, event.y, cr)
         if edge != ResizeEdge::None
           @resizing = edge
           @resize_start_x = event.x
           @resize_start_y = event.y
           @resize_start_rect = @rect
+          event.stop!
+          return true
+        end
+      end
+
+      # Check for drag start on title bar - only on mouse press
+      if @draggable && event.action.press? && event.button.left?
+        if on_title_bar?(event.x, event.y, cr)
+          @dragging = true
+          @drag_start_x = event.x
+          @drag_start_y = event.y
+          @drag_start_rect = @rect
           event.stop!
           return true
         end
@@ -427,11 +459,11 @@ module Tui
     # Detect which edge/corner the mouse is on for resize
     # Uses 1-cell tolerance for easier targeting
     private def detect_resize_edge(mx : Int32, my : Int32, cr : Rect) : ResizeEdge
-      # Check if on border (exact match for single-cell borders)
-      on_top = my == cr.y
-      on_bottom = my == cr.bottom - 1
-      on_left = mx == cr.x
-      on_right = mx == cr.right - 1
+      # Check if on border (with 1-cell tolerance for usability)
+      on_top = my >= cr.y && my <= cr.y
+      on_bottom = my >= cr.bottom - 1 && my <= cr.bottom - 1
+      on_left = mx >= cr.x && mx <= cr.x
+      on_right = mx >= cr.right - 1 && mx <= cr.right - 1
 
       # Must be on at least one edge to be a resize target
       return ResizeEdge::None unless on_top || on_bottom || on_left || on_right
@@ -449,7 +481,9 @@ module Tui
       elsif on_bottom && near_right
         ResizeEdge::BottomRight
       elsif on_top
-        ResizeEdge::Top
+        # Middle of top edge is title bar (for dragging), not resize
+        # Only allow Top resize if dragging is disabled
+        @draggable ? ResizeEdge::None : ResizeEdge::Top
       elsif on_bottom
         ResizeEdge::Bottom
       elsif on_left
@@ -516,6 +550,36 @@ module Tui
       end
 
       @rect = Rect.new(new_x, new_y, new_w, new_h)
+      mark_dirty!
+    end
+
+    # Check if mouse is on title bar (top row, excluding resize corners)
+    private def on_title_bar?(mx : Int32, my : Int32, cr : Rect) : Bool
+      # Must be on top row
+      return false unless my == cr.y
+
+      # Exclude corners (first and last 2 cells are for resize)
+      return false if mx <= cr.x + 2
+      return false if mx >= cr.right - 3
+
+      # Must be within horizontal bounds
+      mx > cr.x && mx < cr.right - 1
+    end
+
+    # Apply drag to move window
+    private def apply_drag(mx : Int32, my : Int32) : Nil
+      dx = mx - @drag_start_x
+      dy = my - @drag_start_y
+      r = @drag_start_rect
+
+      new_x = r.x + dx
+      new_y = r.y + dy
+
+      # Keep window at least partially visible (don't allow dragging completely off-screen)
+      new_x = Math.max(2 - r.width + 10, new_x)  # At least 10 chars visible on left
+      new_y = Math.max(0, new_y)                  # Don't go above screen
+
+      @rect = Rect.new(new_x, new_y, r.width, r.height)
       mark_dirty!
     end
 

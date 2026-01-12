@@ -91,6 +91,8 @@ require "./tui/widgets/time_picker"
 require "./tui/widgets/placeholder"
 require "./tui/widgets/pretty"
 require "./tui/widgets/diff_view"
+require "./tui/widgets/scrollbar"
+require "./tui/widgets/scroll_area"
 
 # Markdown
 require "./tui/markdown/parser"
