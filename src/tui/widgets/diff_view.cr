@@ -331,11 +331,44 @@ module Tui
     end
   end
 
+  # Commit metadata for display in DiffView header
+  struct CommitInfo
+    property hash : String
+    property short_hash : String
+    property message : String
+    property author : String
+    property date : String
+    property parents : Array(String)  # Parent commit hashes
+
+    def initialize(@hash = "", @short_hash = "", @message = "", @author = "", @date = "", @parents = [] of String)
+    end
+
+    def empty? : Bool
+      @hash.empty?
+    end
+
+    # Number of header lines needed for display
+    def header_lines : Int32
+      return 0 if empty?
+      lines = 4  # commit, author, date, blank line
+      lines += 1 if parents.size > 0  # Parents line
+      lines += 1  # Message line
+      lines
+    end
+  end
+
   # DiffView widget - displays parsed diff with colors and interactivity
   class DiffView < Widget
     property files : Array(DiffFile) = [] of DiffFile
     property scroll_offset : Int32 = 0
     property selected_index : Int32 = 0  # Currently selected line/item
+
+    # Commit metadata (for single commit diffs)
+    property commit_info : CommitInfo = CommitInfo.new
+
+    # Navigation history (for backspace to go back)
+    @history : Array(String) = [] of String  # Stack of commit hashes
+    @current_hash : String = ""
 
     # Colors
     property addition_bg : Color = Color.rgb(0, 60, 0)       # Dark green
@@ -347,14 +380,21 @@ module Tui
     property header_fg : Color = Color.rgb(150, 150, 255)    # Light blue
     property line_number_fg : Color = Color.palette(240)     # Gray
     property word_change_bg : Color = Color.rgb(80, 80, 0)   # Highlight changed words
+    property commit_header_bg : Color = Color.rgb(30, 30, 50)  # Commit header background
+    property hash_fg : Color = Color.yellow                    # Commit hash color (clickable)
+    property author_fg : Color = Color.cyan                    # Author color
+    property date_fg : Color = Color.palette(245)              # Date color
 
     # UI settings
     property? show_line_numbers : Bool = true
     property line_number_width : Int32 = 4
     property? show_scrollbar : Bool = true
+    property? show_commit_header : Bool = true
 
     # Callbacks
     @on_file_select : Proc(DiffFile, Nil)?
+    @on_hash_click : Proc(String, Nil)?  # Called when commit hash is clicked
+    @on_go_back : Proc(Nil)?             # Called when backspace is pressed and history exists
 
     def initialize(id : String? = nil)
       super(id)
@@ -372,6 +412,49 @@ module Tui
     # Callback when file is selected
     def on_file_select(&block : DiffFile -> Nil)
       @on_file_select = block
+    end
+
+    # Callback when commit hash is clicked (for navigation)
+    def on_hash_click(&block : String -> Nil)
+      @on_hash_click = block
+    end
+
+    # Callback when backspace is pressed to go back
+    def on_go_back(&block : -> Nil)
+      @on_go_back = block
+    end
+
+    # Set commit with content - pushes current to history
+    def set_commit(hash : String, info : CommitInfo, diff_text : String)
+      # Push current to history if we have one
+      if !@current_hash.empty? && @current_hash != hash
+        @history << @current_hash
+      end
+      @current_hash = hash
+      @commit_info = info
+      @files = DiffParser.parse(diff_text)
+      @scroll_offset = 0
+      @selected_index = 0
+      mark_dirty!
+    end
+
+    # Clear commit info (for file diffs, not commit diffs)
+    def clear_commit_info
+      @commit_info = CommitInfo.new
+      @history.clear
+      @current_hash = ""
+      mark_dirty!
+    end
+
+    # Go back in history
+    def go_back : String?
+      return nil if @history.empty?
+      @history.pop
+    end
+
+    # Check if can go back
+    def can_go_back? : Bool
+      !@history.empty?
     end
 
     # Collapse/expand all
@@ -412,9 +495,15 @@ module Tui
       @files.sum(&.deletions)
     end
 
+    # Number of header lines for commit info
+    def commit_header_lines : Int32
+      return 0 unless @show_commit_header && !@commit_info.empty?
+      @commit_info.header_lines
+    end
+
     # Calculate total visible lines
     def total_lines : Int32
-      count = 0
+      count = commit_header_lines
       @files.each do |file|
         count += 1  # File header
         next if file.collapsed?
@@ -443,6 +532,20 @@ module Tui
 
       # Skip to scroll offset
       current_line = 0
+
+      # Render commit info header if present
+      header_lines = commit_header_lines
+      if header_lines > 0
+        header_lines.times do |i|
+          break if y >= @rect.bottom
+          if current_line >= @scroll_offset
+            render_commit_header_line(buffer, clip, y, i)
+            y += 1
+          end
+          current_line += 1
+          line_idx += 1
+        end
+      end
 
       @files.each do |file|
         break if y >= @rect.bottom
@@ -516,6 +619,132 @@ module Tui
         else
           buffer.set(scrollbar_x, y, '│', track_style)
         end
+      end
+    end
+
+    # Store clickable hash regions for mouse handling
+    @hash_regions : Array(Tuple(Int32, Int32, Int32, String)) = [] of Tuple(Int32, Int32, Int32, String)  # y, x_start, x_end, hash
+
+    private def render_commit_header_line(buffer : Buffer, clip : Rect, y : Int32, line_idx : Int32)
+      return if @commit_info.empty?
+
+      bg = commit_header_bg
+      @hash_regions.clear if line_idx == 0  # Clear on first line
+
+      # Clear line
+      @rect.width.times do |dx|
+        buffer.set(@rect.x + dx, y, ' ', Style.new(bg: bg)) if clip.contains?(@rect.x + dx, y)
+      end
+
+      x = @rect.x + 1
+      case line_idx
+      when 0
+        # Commit hash line (with back indicator if history exists)
+        label = can_go_back? ? "← commit " : "commit "
+        label_style = Style.new(fg: Color.palette(245), bg: bg)
+        label.each_char do |c|
+          buffer.set(x, y, c, label_style) if clip.contains?(x, y)
+          x += 1
+        end
+
+        # Clickable hash
+        hash_start = x
+        hash_style = Style.new(fg: @hash_fg, bg: bg, attrs: Attributes::Underline)
+        @commit_info.hash[0, 12].each_char do |c|
+          buffer.set(x, y, c, hash_style) if clip.contains?(x, y)
+          x += 1
+        end
+        @hash_regions << {y, hash_start, x, @commit_info.hash}
+
+      when 1
+        # Author line
+        label = "Author: "
+        label_style = Style.new(fg: Color.palette(245), bg: bg)
+        label.each_char do |c|
+          buffer.set(x, y, c, label_style) if clip.contains?(x, y)
+          x += 1
+        end
+        author_style = Style.new(fg: @author_fg, bg: bg)
+        @commit_info.author.each_char do |c|
+          buffer.set(x, y, c, author_style) if clip.contains?(x, y)
+          x += 1
+        end
+
+      when 2
+        # Date line
+        label = "Date:   "
+        label_style = Style.new(fg: Color.palette(245), bg: bg)
+        label.each_char do |c|
+          buffer.set(x, y, c, label_style) if clip.contains?(x, y)
+          x += 1
+        end
+        date_style = Style.new(fg: @date_fg, bg: bg)
+        @commit_info.date.each_char do |c|
+          buffer.set(x, y, c, date_style) if clip.contains?(x, y)
+          x += 1
+        end
+
+      when 3
+        # Parents line (if any)
+        if @commit_info.parents.size > 0
+          label = "Parents: "
+          label_style = Style.new(fg: Color.palette(245), bg: bg)
+          label.each_char do |c|
+            buffer.set(x, y, c, label_style) if clip.contains?(x, y)
+            x += 1
+          end
+
+          # Render each parent hash as clickable
+          @commit_info.parents.each_with_index do |parent, idx|
+            if idx > 0
+              sep = " "
+              sep.each_char do |c|
+                buffer.set(x, y, c, label_style) if clip.contains?(x, y)
+                x += 1
+              end
+            end
+            hash_start = x
+            hash_style = Style.new(fg: @hash_fg, bg: bg, attrs: Attributes::Underline)
+            parent[0, 8].each_char do |c|
+              buffer.set(x, y, c, hash_style) if clip.contains?(x, y)
+              x += 1
+            end
+            @hash_regions << {y, hash_start, x, parent}
+          end
+        else
+          # Skip this line if no parents, use for message
+          label = "Message: "
+          label_style = Style.new(fg: Color.palette(245), bg: bg)
+          label.each_char do |c|
+            buffer.set(x, y, c, label_style) if clip.contains?(x, y)
+            x += 1
+          end
+          msg_style = Style.new(fg: Color.white, bg: bg)
+          @commit_info.message[0, @rect.width - 12].each_char do |c|
+            buffer.set(x, y, c, msg_style) if clip.contains?(x, y)
+            x += 1
+          end
+        end
+
+      when 4
+        # Message line (if we had parents)
+        if @commit_info.parents.size > 0
+          label = "Message: "
+          label_style = Style.new(fg: Color.palette(245), bg: bg)
+          label.each_char do |c|
+            buffer.set(x, y, c, label_style) if clip.contains?(x, y)
+            x += 1
+          end
+          msg_style = Style.new(fg: Color.white, bg: bg)
+          @commit_info.message[0, @rect.width - 12].each_char do |c|
+            buffer.set(x, y, c, msg_style) if clip.contains?(x, y)
+            x += 1
+          end
+        end
+        # else: blank separator line
+
+      else
+        # Blank separator line
       end
     end
 
@@ -732,6 +961,15 @@ module Tui
         if event.action.press? && event.button.left?
           self.focused = true
 
+          # Check if click is on a hash region (clickable commit hash)
+          @hash_regions.each do |(hy, hx_start, hx_end, hash)|
+            if event.y == hy && event.x >= hx_start && event.x < hx_end
+              @on_hash_click.try &.call(hash)
+              event.stop_propagation!
+              return true
+            end
+          end
+
           # Calculate which line was clicked
           clicked_line = @scroll_offset + (event.y - @rect.y - 1)  # -1 for header
           if clicked_line >= 0 && clicked_line < total_lines
@@ -748,6 +986,13 @@ module Tui
         return false unless focused?
 
         case event.key
+        when .backspace?
+          # Go back in history
+          if can_go_back?
+            @on_go_back.try &.call
+            event.stop_propagation!
+            return true
+          end
         when .up?
           select_prev
           event.stop_propagation!

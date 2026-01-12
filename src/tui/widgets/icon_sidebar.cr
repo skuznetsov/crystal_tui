@@ -177,9 +177,7 @@ module Tui
       end
     end
 
-    def handle_event(event : Event) : Bool
-      return false if event.stopped?
-
+    def on_event(event : Event) : Bool
       case event
       when KeyEvent
         return false unless focused?
@@ -212,8 +210,8 @@ module Tui
         end
 
       when MouseEvent
-        # Check if click is in sidebar
-        return false unless event.x >= @rect.x && event.x < @rect.x + @width
+        # Check if click is in sidebar area
+        return false unless event.in_rect?(@rect)
 
         item_index = (event.y - @rect.y) // 3
         return false if item_index < 0 || item_index >= @items.size
