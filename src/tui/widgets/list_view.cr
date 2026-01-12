@@ -5,6 +5,11 @@ module Tui
     property selected_index : Int32 = 0
     property scroll_offset : Int32 = 0
 
+    # Double-click detection
+    @last_click_time : Time = Time.utc
+    @last_click_index : Int32 = -1
+    DOUBLE_CLICK_MS = 400
+
     # Styling
     property item_height : Int32 = 1
     property selected_style : Style = Style.new(fg: Color.black, bg: Color.cyan)
@@ -190,12 +195,11 @@ module Tui
       end
     end
 
-    def handle_event(event : Event) : Bool
-      return false unless focused?
-      return false if event.stopped?
-
+    def on_event(event : Event) : Bool
       case event
       when KeyEvent
+        return false unless focused?
+
         case
         when event.matches?("up"), event.matches?("k")
           select_prev
@@ -228,23 +232,10 @@ module Tui
             return true
           end
         end
+
       when MouseEvent
-        if event.action.press? && event.button.left? && event.in_rect?(@rect)
-          # Calculate clicked item index
-          relative_y = event.y - @rect.y
-          clicked_index = @scroll_offset + relative_y // @item_height
-          if clicked_index >= 0 && clicked_index < @items.size
-            if clicked_index == @selected_index
-              # Double-click behavior: activate
-              @on_activate.try &.call(@items[clicked_index], clicked_index)
-            else
-              select_index(clicked_index)
-            end
-            focus
-            event.stop!
-            return true
-          end
-        elsif event.action.press? && event.in_rect?(@rect)
+        # Wheel scrolling works without focus (hover scroll)
+        if event.in_rect?(@rect)
           if event.button.wheel_up?
             select_prev
             event.stop!
@@ -255,9 +246,35 @@ module Tui
             return true
           end
         end
+
+        # Click handling
+        if event.action.press? && event.button.left? && event.in_rect?(@rect)
+          # Calculate clicked item index
+          relative_y = event.y - @rect.y
+          clicked_index = @scroll_offset + relative_y // @item_height
+          if clicked_index >= 0 && clicked_index < @items.size
+            now = Time.utc
+            is_double_click = clicked_index == @last_click_index &&
+                              (now - @last_click_time).total_milliseconds < DOUBLE_CLICK_MS
+
+            @last_click_time = now
+            @last_click_index = clicked_index
+
+            if is_double_click
+              # Double-click: activate item
+              @on_activate.try &.call(@items[clicked_index], clicked_index)
+            else
+              # Single click: select item
+              select_index(clicked_index)
+            end
+            focus
+            event.stop!
+            return true
+          end
+        end
       end
 
-      super
+      false
     end
 
     def min_size : {Int32, Int32}

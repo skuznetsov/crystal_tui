@@ -66,9 +66,15 @@ module Tui
     @selected_index : Int32 = 0
     @scroll_offset : Int32 = 0
 
+    # Double-click detection
+    @last_click_time : Time = Time.utc
+    @last_click_index : Int32 = -1
+    DOUBLE_CLICK_MS = 400
+
     @on_select : Proc(Node(T), Nil)?
     @on_expand : Proc(Node(T), Nil)?
     @on_collapse : Proc(Node(T), Nil)?
+    @on_activate : Proc(Node(T), Nil)?  # Called on Enter or double-click
 
     def initialize(id : String? = nil)
       super(id)
@@ -85,6 +91,10 @@ module Tui
 
     def on_collapse(&block : Node(T) -> Nil) : Nil
       @on_collapse = block
+    end
+
+    def on_activate(&block : Node(T) -> Nil) : Nil
+      @on_activate = block
     end
 
     def selected_node : Node(T)?
@@ -186,11 +196,11 @@ module Tui
       end
     end
 
-    def handle_event(event : Event) : Bool
-      return false if event.stopped?
-
+    def on_event(event : Event) : Bool
       case event
       when KeyEvent
+        return false unless focused?
+
         case
         when event.matches?("up"), event.matches?("k")
           move_selection(-1)
@@ -199,7 +209,14 @@ module Tui
           move_selection(1)
           return true
         when event.matches?("enter"), event.matches?("space")
-          toggle_selected
+          # Enter/Space: activate if leaf, toggle if folder
+          if node = selected_node
+            if node.leaf?
+              @on_activate.try &.call(node)
+            else
+              toggle_selected
+            end
+          end
           return true
         when event.matches?("right"), event.matches?("l")
           expand_selected
@@ -217,29 +234,48 @@ module Tui
           mark_dirty!
           return true
         end
+
       when MouseEvent
-        if event.action.press? && event.in_rect?(@rect)
+        # Wheel scrolling works without focus (hover scroll)
+        if event.in_rect?(@rect)
+          if event.button.wheel_up?
+            @scroll_offset = (@scroll_offset - 3).clamp(0, (@visible_nodes.size - @rect.height).clamp(0, Int32::MAX))
+            mark_dirty!
+            return true
+          elsif event.button.wheel_down?
+            @scroll_offset = (@scroll_offset + 3).clamp(0, (@visible_nodes.size - @rect.height).clamp(0, Int32::MAX))
+            mark_dirty!
+            return true
+          end
+        end
+
+        # Click handling
+        if event.action.press? && event.button.left? && event.in_rect?(@rect)
           clicked_index = @scroll_offset + (event.y - @rect.y)
           if clicked_index >= 0 && clicked_index < @visible_nodes.size
-            if @selected_index == clicked_index
-              toggle_selected
-            else
-              @selected_index = clicked_index
-              @on_select.try &.call(@visible_nodes[@selected_index])
-              mark_dirty!
+            now = Time.utc
+            is_double_click = clicked_index == @last_click_index &&
+                              (now - @last_click_time).total_milliseconds < DOUBLE_CLICK_MS
+
+            @last_click_time = now
+            @last_click_index = clicked_index
+
+            @selected_index = clicked_index
+            @on_select.try &.call(@visible_nodes[@selected_index])
+
+            if is_double_click
+              # Double-click: activate if leaf, toggle if folder
+              if node = @visible_nodes[clicked_index]?
+                if node.leaf?
+                  @on_activate.try &.call(node)
+                else
+                  toggle_selected
+                end
+              end
             end
+            mark_dirty!
+            return true
           end
-          return true
-        end
-        if event.button.wheel_up?
-          @scroll_offset = (@scroll_offset - 3).clamp(0, (@visible_nodes.size - @rect.height).clamp(0, Int32::MAX))
-          mark_dirty!
-          return true
-        end
-        if event.button.wheel_down?
-          @scroll_offset = (@scroll_offset + 3).clamp(0, (@visible_nodes.size - @rect.height).clamp(0, Int32::MAX))
-          mark_dirty!
-          return true
         end
       end
 

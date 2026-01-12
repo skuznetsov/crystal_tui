@@ -351,6 +351,7 @@ module Tui
     # UI settings
     property? show_line_numbers : Bool = true
     property line_number_width : Int32 = 4
+    property? show_scrollbar : Bool = true
 
     # Callbacks
     @on_file_select : Proc(DiffFile, Nil)?
@@ -479,6 +480,41 @@ module Tui
             current_line += 1
             line_idx += 1
           end
+        end
+      end
+
+      # Draw scrollbar
+      if show_scrollbar?
+        draw_scrollbar(buffer, clip, visible_height)
+      end
+    end
+
+    private def draw_scrollbar(buffer : Buffer, clip : Rect, visible_height : Int32) : Nil
+      return if @rect.width < 2
+
+      total = total_lines
+      return if total <= visible_height
+
+      scrollbar_x = @rect.right - 1
+      content_y = @rect.y + 1  # +1 for header bar
+      content_height = visible_height
+
+      # Calculate thumb position and size
+      thumb_height = Math.max(1, (content_height * content_height / total).to_i)
+      max_scroll = total - content_height
+      thumb_pos = max_scroll > 0 ? (@scroll_offset * (content_height - thumb_height) / max_scroll).to_i : 0
+
+      track_style = Style.new(fg: Color.palette(240))
+      thumb_style = Style.new(fg: focused? ? Color.cyan : Color.white)
+
+      content_height.times do |i|
+        y = content_y + i
+        next unless clip.contains?(scrollbar_x, y)
+
+        if i >= thumb_pos && i < thumb_pos + thumb_height
+          buffer.set(scrollbar_x, y, '█', thumb_style)
+        else
+          buffer.set(scrollbar_x, y, '│', track_style)
         end
       end
     end
@@ -678,6 +714,21 @@ module Tui
     def on_event(event : Event) : Bool
       case event
       when MouseEvent
+        # Wheel scrolling works without focus (hover scroll)
+        if event.in_rect?(@rect)
+          visible_height = @rect.height - 1  # -1 for header
+          max_scroll = (total_lines - visible_height).clamp(0, Int32::MAX)
+          if event.button.wheel_up?
+            @scroll_offset = (@scroll_offset - 3).clamp(0, max_scroll)
+            mark_dirty!
+            return true
+          elsif event.button.wheel_down?
+            @scroll_offset = (@scroll_offset + 3).clamp(0, max_scroll)
+            mark_dirty!
+            return true
+          end
+        end
+
         if event.action.press? && event.button.left?
           self.focused = true
 

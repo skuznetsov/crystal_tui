@@ -1033,9 +1033,7 @@ module Tui
       true
     end
 
-    def handle_event(event : Event) : Bool
-      return false if event.stopped?
-
+    def on_event(event : Event) : Bool
       case event
       when KeyEvent
         case event.key

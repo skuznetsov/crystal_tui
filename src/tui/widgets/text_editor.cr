@@ -592,8 +592,7 @@ module Tui
       end
     end
 
-    def handle_event(event : Event) : Bool
-      return false if event.stopped?
+    def on_event(event : Event) : Bool
       return false unless focused?
 
       case event

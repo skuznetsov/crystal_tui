@@ -174,6 +174,25 @@ module Tui
       false
     end
 
+    # Override find_widget_at to only consider active tab's content
+    # This prevents inactive tabs' stale rects from interfering with hit testing
+    def find_widget_at(x : Int32, y : Int32) : Widget?
+      return nil unless visible?
+      return nil unless rect.contains?(x, y)
+
+      # Only check active tab's content, not all children
+      if @active_tab >= 0 && @active_tab < @tabs.size
+        if content = @tabs[@active_tab].content
+          if found = content.find_widget_at(x, y)
+            return found
+          end
+        end
+      end
+
+      # No active content contains point, we are the target
+      self
+    end
+
     def render(buffer : Buffer, clip : Rect) : Nil
       return unless visible?
       return if @rect.empty?
