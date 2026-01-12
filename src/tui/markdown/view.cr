@@ -53,6 +53,10 @@ module Tui
     property? horizontal_scroll_enabled : Bool = true  # Allow horizontal scrolling
     property horizontal_scroll_step : Int32 = 8       # Pixels to scroll per keypress
 
+    # Content padding (space from edges)
+    property padding_left : Int32 = 1
+    property padding_right : Int32 = 1
+
     # Parsed content
     @document : Markdown::Document = [] of Markdown::Block
     @raw_markdown : String = ""
@@ -388,11 +392,12 @@ module Tui
       @details_regions.clear
       @rendered_with_default_width = @rect.width == 0
 
-      # Use width minus 1 to leave room for scrollbar
+      # Use width minus scrollbar and padding
       # We always render at scrollbar-aware width for consistency
       # (better to have slightly narrower content than missing chars when scrollbar appears)
       full_width = @rect.width > 0 ? @rect.width : 80  # Default width
-      width = full_width > 1 ? full_width - 1 : full_width  # Reserve scrollbar column
+      width = full_width - 1 - @padding_left - @padding_right  # Reserve scrollbar + padding
+      width = width.clamp(10, full_width)  # Ensure minimum width
       @last_render_width = full_width  # Track full width for change detection
 
 
@@ -763,9 +768,11 @@ module Tui
       has_v_scrollbar = @content_height > @rect.height
       has_h_scrollbar = @horizontal_scroll_enabled && @content_width > @rect.width
 
-      # Calculate visible area (reduce for scrollbars)
+      # Calculate visible area (reduce for scrollbars and padding)
       visible_height = has_h_scrollbar ? @rect.height - 1 : @rect.height
-      content_width = has_v_scrollbar ? @rect.width - 1 : @rect.width
+      scrollbar_width = has_v_scrollbar ? 1 : 0
+      content_width = @rect.width - scrollbar_width - @padding_left - @padding_right
+      content_x = @rect.x + @padding_left
 
       # Clamp scroll positions
       max_scroll_x = (@content_width - content_width).clamp(0, Int32::MAX)
@@ -808,7 +815,7 @@ module Tui
 
             # Only render if within viewport
             if visible_start < content_width
-              x = @rect.x + visible_start
+              x = content_x + visible_start
               if clip.contains?(x, y)
                 # Apply view's background to style if needed
                 final_style = with_background(style)
@@ -848,7 +855,7 @@ module Tui
           display_width = last_line.sum { |(text, _)| Unicode.grapheme_width(text) }
           cursor_virtual_x = display_width - @scroll_x
           if cursor_virtual_x >= 0 && cursor_virtual_x < content_width
-            cursor_x = @rect.x + cursor_virtual_x
+            cursor_x = content_x + cursor_virtual_x
             cursor_y = @rect.y + screen_row
             buffer.set(cursor_x, cursor_y, @cursor_char, @cursor_style)
           end
@@ -871,6 +878,7 @@ module Tui
       return if viewport_width <= 2 || @content_width <= 0
 
       y = @rect.bottom - 1
+      scrollbar_x = @rect.x + @padding_left
       scrollbar_width = viewport_width
 
       # Calculate thumb size and position
@@ -884,7 +892,7 @@ module Tui
       thumb_style = Style.new(fg: Color.white, bg: Color.palette(240))
 
       scrollbar_width.times do |i|
-        x = @rect.x + i
+        x = scrollbar_x + i
         next unless clip.contains?(x, y)
 
         if i >= thumb_pos && i < thumb_pos + thumb_size
@@ -896,10 +904,10 @@ module Tui
 
       # Draw scroll indicators at edges
       if @scroll_x > 0
-        buffer.set(@rect.x, y, '◀', Style.new(fg: Color.cyan, bg: @background || Color.default)) if clip.contains?(@rect.x, y)
+        buffer.set(scrollbar_x, y, '◀', Style.new(fg: Color.cyan, bg: @background || Color.default)) if clip.contains?(scrollbar_x, y)
       end
       if @scroll_x < max_scroll
-        end_x = @rect.x + scrollbar_width - 1
+        end_x = scrollbar_x + scrollbar_width - 1
         buffer.set(end_x, y, '▶', Style.new(fg: Color.cyan, bg: @background || Color.default)) if clip.contains?(end_x, y)
       end
     end
