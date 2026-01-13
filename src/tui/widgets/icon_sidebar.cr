@@ -167,6 +167,13 @@ module Tui
       # Draw icon using set_wide for proper wide char handling
       buffer.set_wide(icon_x, icon_y, item.icon, style) if clip.contains?(icon_x, icon_y)
 
+      # Overwrite continuation cell with regular space to ensure background is output.
+      # This fixes terminals that render some wide chars (like ⚙) as width 1.
+      icon_width = Unicode.char_width(item.icon)
+      if icon_width == 2 && clip.contains?(icon_x + 1, icon_y)
+        buffer.set(icon_x + 1, icon_y, ' ', style)
+      end
+
       # Draw badge if present
       if badge = item.badge
         badge_text = badge > 99 ? "99" : badge.to_s

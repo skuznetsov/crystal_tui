@@ -266,23 +266,11 @@ module Tui
           next if @prev_cells[idx] == cell
 
           # Handle continuation cells
-          # Output continuation cells as spaces to ensure background is correct.
-          # This fixes terminals that render some "wide" characters (like ⚙) as width 1.
+          # Never output continuation cells; the leading wide glyph already occupies this column.
+          # Clearing is handled by updating the leading cell when needed.
           prev_cell = @prev_cells[idx]
           if cell.continuation?
-            # Always output continuation cell as space with its style
-            # This ensures proper background even when terminal renders preceding wide char as width 1
-            if y != last_y || x != last_x + 1
-              s << ANSI.move(x, y)
-            end
-            if last_style != cell.style || prev_cell.style != cell.style
-              s << cell.style.to_ansi
-              last_style = cell.style
-            end
-            s << ' '
             @prev_cells[idx] = cell
-            last_x = x
-            last_y = y
             next
           elsif prev_cell.continuation? && !cell.continuation?
             # Previous was continuation, now it's not - need to output the new cell
