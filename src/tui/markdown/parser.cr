@@ -414,8 +414,9 @@ module Tui
           # Check for patterns at current position
           remaining = text[pos..]
 
-          # Bold+Italic: ***text*** or ___text___
-          if m = remaining.match(/^\*\*\*(.+?)\*\*\*/) || remaining.match(/^___(.+?)___/)
+          # Bold+Italic: ***text*** only
+          # Note: ___ style disabled to protect variable_names_with_underscores
+          if m = remaining.match(/^\*\*\*(.+?)\*\*\*/)
             flush_text(elements, current_text)
             current_text = ""
             elements << InlineElement.new(InlineType::BoldItalic, m[1])
@@ -423,8 +424,9 @@ module Tui
             next
           end
 
-          # Bold: **text** or __text__
-          if m = remaining.match(/^\*\*(.+?)\*\*/) || remaining.match(/^__(.+?)__/)
+          # Bold: **text** only
+          # Note: __ style disabled to protect variable_names_with_underscores
+          if m = remaining.match(/^\*\*(.+?)\*\*/)
             flush_text(elements, current_text)
             current_text = ""
             elements << InlineElement.new(InlineType::Bold, m[1])
@@ -432,8 +434,10 @@ module Tui
             next
           end
 
-          # Italic: *text* or _text_
-          if m = remaining.match(/^\*([^*]+?)\*/) || remaining.match(/^_([^_]+?)_/)
+          # Italic: *text* only
+          # Note: _ style disabled to protect variable_names_with_underscores
+          # Using only asterisks for emphasis avoids breaking code identifiers
+          if m = remaining.match(/^\*([^*]+?)\*/)
             flush_text(elements, current_text)
             current_text = ""
             elements << InlineElement.new(InlineType::Italic, m[1])
