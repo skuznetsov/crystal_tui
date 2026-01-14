@@ -105,10 +105,15 @@ module Tui
     @has_selection : Bool = false
     property selection_bg : Color = Color.rgb(60, 90, 150)  # Blue highlight
 
-    # Scrollbar drag state
+    # Vertical scrollbar drag state
     @scrollbar_dragging : Bool = false
     @scrollbar_drag_start_y : Int32 = 0
     @scrollbar_drag_start_scroll : Int32 = 0
+
+    # Horizontal scrollbar drag state
+    @h_scrollbar_dragging : Bool = false
+    @h_scrollbar_drag_start_x : Int32 = 0
+    @h_scrollbar_drag_start_scroll : Int32 = 0
 
     def initialize(id : String? = nil)
       super(id)
@@ -887,28 +892,18 @@ module Tui
       scroll_ratio = max_scroll > 0 ? @scroll_x.to_f / max_scroll : 0.0
       thumb_pos = ((scrollbar_width - thumb_size) * scroll_ratio).to_i
 
-      # Draw scrollbar track and thumb
-      track_style = Style.new(fg: Color.palette(240), bg: @background || Color.default)
-      thumb_style = Style.new(fg: Color.white, bg: Color.palette(240))
+      # Draw scrollbar track and thumb (matching vertical scrollbar style)
+      track_style = Style.new(fg: Color.palette(238))
+      thumb_style = Style.new(fg: Color.palette(244))
 
       scrollbar_width.times do |i|
         x = scrollbar_x + i
         next unless clip.contains?(x, y)
 
-        if i >= thumb_pos && i < thumb_pos + thumb_size
-          buffer.set(x, y, '█', thumb_style)
-        else
-          buffer.set(x, y, '─', track_style)
-        end
-      end
-
-      # Draw scroll indicators at edges
-      if @scroll_x > 0
-        buffer.set(scrollbar_x, y, '◀', Style.new(fg: Color.cyan, bg: @background || Color.default)) if clip.contains?(scrollbar_x, y)
-      end
-      if @scroll_x < max_scroll
-        end_x = scrollbar_x + scrollbar_width - 1
-        buffer.set(end_x, y, '▶', Style.new(fg: Color.cyan, bg: @background || Color.default)) if clip.contains?(end_x, y)
+        is_thumb = i >= thumb_pos && i < thumb_pos + thumb_size
+        char = is_thumb ? '▄' : '░'  # ▄ for thumb (horizontal), ░ for track
+        style = is_thumb ? thumb_style : track_style
+        buffer.set(x, y, char, style)
       end
     end
 
@@ -1041,6 +1036,74 @@ module Tui
       true
     end
 
+    # Check if click is on horizontal scrollbar
+    private def on_h_scrollbar?(x : Int32, y : Int32) : Bool
+      return false unless @horizontal_scroll_enabled && @content_width > @rect.width
+      return false unless y == @rect.bottom - 1  # Horizontal scrollbar is at bottom
+      return false unless x >= @rect.x + @padding_left && x < @rect.right - 1
+      true
+    end
+
+    # Get horizontal scrollbar thumb position and width
+    private def h_scrollbar_thumb_info : {pos: Int32, width: Int32}
+      viewport_width = @rect.width - @padding_left - @padding_right - 1  # -1 for vertical scrollbar
+      thumb_width = (viewport_width.to_f * viewport_width / @content_width).clamp(2, viewport_width).to_i
+      max_h_scroll = (@content_width - viewport_width).clamp(0, Int32::MAX)
+      thumb_pos = if max_h_scroll > 0
+                    (@scroll_x.to_f / max_h_scroll * (viewport_width - thumb_width)).to_i
+                  else
+                    0
+                  end
+      {pos: thumb_pos, width: thumb_width}
+    end
+
+    # Handle horizontal scrollbar click
+    private def handle_h_scrollbar_click(screen_x : Int32) : Bool
+      return false unless @horizontal_scroll_enabled && @content_width > @rect.width
+
+      rel_x = screen_x - @rect.x - @padding_left
+      thumb = h_scrollbar_thumb_info
+      viewport_width = @rect.width - @padding_left - @padding_right - 1
+
+      if rel_x < thumb[:pos]
+        # Click left of thumb - scroll left
+        scroll_left(viewport_width // 2)
+      elsif rel_x >= thumb[:pos] + thumb[:width]
+        # Click right of thumb - scroll right
+        scroll_right(viewport_width // 2)
+      else
+        # Click on thumb - start drag
+        @h_scrollbar_dragging = true
+        @h_scrollbar_drag_start_x = screen_x
+        @h_scrollbar_drag_start_scroll = @scroll_x
+      end
+
+      true
+    end
+
+    # Handle horizontal scrollbar drag
+    private def handle_h_scrollbar_drag(screen_x : Int32) : Bool
+      return false unless @h_scrollbar_dragging
+
+      viewport_width = @rect.width - @padding_left - @padding_right - 1
+      thumb = h_scrollbar_thumb_info
+      max_h_scroll = (@content_width - viewport_width).clamp(0, Int32::MAX)
+
+      # Calculate scroll delta based on mouse movement
+      delta_x = screen_x - @h_scrollbar_drag_start_x
+
+      # Map pixel delta to scroll delta
+      scrollable_track = viewport_width - thumb[:width]
+      if scrollable_track > 0
+        scroll_per_pixel = max_h_scroll.to_f / scrollable_track
+        new_scroll = (@h_scrollbar_drag_start_scroll + delta_x * scroll_per_pixel).to_i
+        @scroll_x = new_scroll.clamp(0, max_h_scroll)
+        mark_dirty!
+      end
+
+      true
+    end
+
     def on_event(event : Event) : Bool
       case event
       when KeyEvent
@@ -1127,9 +1190,16 @@ module Tui
           event.stop!
           return true
         elsif event.action.press? && event.button.left?
-          # Check for scrollbar click first (classic TUI behavior)
+          # Check for vertical scrollbar click first (classic TUI behavior)
           if on_scrollbar?(event.x, event.y)
             handle_scrollbar_click(event.y)
+            event.stop!
+            return true
+          end
+
+          # Check for horizontal scrollbar click
+          if on_h_scrollbar?(event.x, event.y)
+            handle_h_scrollbar_click(event.x)
             event.stop!
             return true
           end
@@ -1160,9 +1230,16 @@ module Tui
             return true
           end
         elsif event.action.drag? && event.button.left?
-          # Handle scrollbar drag first
+          # Handle vertical scrollbar drag first
           if @scrollbar_dragging
             handle_scrollbar_drag(event.y)
+            event.stop!
+            return true
+          end
+
+          # Handle horizontal scrollbar drag
+          if @h_scrollbar_dragging
+            handle_h_scrollbar_drag(event.x)
             event.stop!
             return true
           end
@@ -1176,9 +1253,16 @@ module Tui
             return true
           end
         elsif event.action.release? && event.button.left?
-          # End scrollbar drag
+          # End vertical scrollbar drag
           if @scrollbar_dragging
             @scrollbar_dragging = false
+            event.stop!
+            return true
+          end
+
+          # End horizontal scrollbar drag
+          if @h_scrollbar_dragging
+            @h_scrollbar_dragging = false
             event.stop!
             return true
           end
