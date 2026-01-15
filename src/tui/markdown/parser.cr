@@ -491,5 +491,49 @@ module Tui
     def self.parse(markdown : String) : Document
       Parser.new(markdown).parse
     end
+
+    # Sanitize unclosed inline formatting markers
+    # Call this on each message/block BEFORE concatenating to prevent
+    # unclosed markers from affecting subsequent content
+    def self.sanitize_unclosed(text : String) : String
+      result = text
+
+      # Track markers that need closing (in order of specificity)
+      # Check *** before ** before *
+
+      # Count unmatched *** (bold+italic)
+      bold_italic_opens = result.scan(/(?<!\*)\*\*\*(?!\*)/).size
+      bold_italic_closes = result.scan(/(?<!\*)\*\*\*(?!\*)/).size
+      # Since *** is symmetric, we check if total count is odd
+      if result.scan(/(?<!\*)\*\*\*(?!\*)/).size.odd?
+        result += "***"
+      end
+
+      # Count unmatched ** (bold) - exclude *** patterns
+      # Use gsub to temporarily remove *** patterns for counting
+      temp = result.gsub(/\*\*\*/, "XXX")
+      if temp.scan(/(?<!\*)\*\*(?!\*)/).size.odd?
+        result += "**"
+      end
+
+      # Count unmatched * (italic) - exclude ** and *** patterns
+      temp = result.gsub(/\*\*\*/, "XXX").gsub(/\*\*/, "XX")
+      if temp.scan(/(?<!\*)\*(?!\*)/).size.odd?
+        result += "*"
+      end
+
+      # Count unmatched ~~ (strikethrough)
+      if result.scan(/~~/).size.odd?
+        result += "~~"
+      end
+
+      # Count unmatched ` (inline code) - exclude ``` patterns
+      temp = result.gsub(/```/, "XXX")
+      if temp.scan(/(?<!`)`(?!`)/).size.odd?
+        result += "`"
+      end
+
+      result
+    end
   end
 end
