@@ -105,6 +105,11 @@ module Tui
     @has_selection : Bool = false
     property selection_bg : Color = Color.rgb(60, 90, 150)  # Blue highlight
 
+    # Cursor position for keyboard navigation
+    @cursor_line : Int32 = 0
+    @cursor_col : Int32 = 0
+    @show_cursor : Bool = true  # Show cursor when focused
+
     # Vertical scrollbar drag state
     @scrollbar_dragging : Bool = false
     @scrollbar_drag_start_y : Int32 = 0
@@ -114,6 +119,9 @@ module Tui
     @h_scrollbar_dragging : Bool = false
     @h_scrollbar_drag_start_x : Int32 = 0
     @h_scrollbar_drag_start_scroll : Int32 = 0
+
+    # Deferred scroll-to-bottom (for loading sessions)
+    @scroll_to_bottom_pending : Bool = false
 
     def initialize(id : String? = nil)
       super(id)
@@ -379,6 +387,13 @@ module Tui
       mark_dirty!
     end
 
+    # Schedule scroll to bottom for next render (when rect is valid)
+    # Used when loading sessions to scroll to end after layout
+    def scroll_to_bottom_on_next_render : Nil
+      @scroll_to_bottom_pending = true
+      mark_dirty!
+    end
+
     def page_up : Nil
       scroll_up(@rect.height)
     end
@@ -389,6 +404,122 @@ module Tui
 
     private def max_scroll : Int32
       (@content_height - @rect.height).clamp(0, Int32::MAX)
+    end
+
+    # ─────────────────────────────────────────────────────────────
+    # Cursor Navigation (keyboard-based)
+    # ─────────────────────────────────────────────────────────────
+
+    private def move_cursor_up(selecting : Bool) : Nil
+      return if @rendered_lines.empty?
+      start_keyboard_selection(selecting)
+      if @cursor_line > 0
+        @cursor_line -= 1
+        @cursor_col = [@cursor_col, line_length(@cursor_line)].min
+      end
+      update_keyboard_selection(selecting)
+      ensure_cursor_visible
+      mark_dirty!
+    end
+
+    private def move_cursor_down(selecting : Bool) : Nil
+      return if @rendered_lines.empty?
+      start_keyboard_selection(selecting)
+      if @cursor_line < @rendered_lines.size - 1
+        @cursor_line += 1
+        @cursor_col = [@cursor_col, line_length(@cursor_line)].min
+      end
+      update_keyboard_selection(selecting)
+      ensure_cursor_visible
+      mark_dirty!
+    end
+
+    private def move_cursor_left(selecting : Bool) : Nil
+      return if @rendered_lines.empty?
+      start_keyboard_selection(selecting)
+      if @cursor_col > 0
+        @cursor_col -= 1
+      elsif @cursor_line > 0
+        @cursor_line -= 1
+        @cursor_col = line_length(@cursor_line)
+      end
+      update_keyboard_selection(selecting)
+      ensure_cursor_visible
+      mark_dirty!
+    end
+
+    private def move_cursor_right(selecting : Bool) : Nil
+      return if @rendered_lines.empty?
+      start_keyboard_selection(selecting)
+      if @cursor_col < line_length(@cursor_line)
+        @cursor_col += 1
+      elsif @cursor_line < @rendered_lines.size - 1
+        @cursor_line += 1
+        @cursor_col = 0
+      end
+      update_keyboard_selection(selecting)
+      ensure_cursor_visible
+      mark_dirty!
+    end
+
+    private def move_cursor_to(line : Int32, col : Int32, selecting : Bool) : Nil
+      return if @rendered_lines.empty?
+      start_keyboard_selection(selecting)
+      @cursor_line = line.clamp(0, [@rendered_lines.size - 1, 0].max)
+      @cursor_col = col.clamp(0, line_length(@cursor_line))
+      update_keyboard_selection(selecting)
+      ensure_cursor_visible
+      mark_dirty!
+    end
+
+    private def start_keyboard_selection(selecting : Bool) : Nil
+      if selecting && !@has_selection
+        @selection_start = SelectionPos.new(@cursor_line, @cursor_col)
+        @selection_end = SelectionPos.new(@cursor_line, @cursor_col)
+        @has_selection = true
+      elsif !selecting
+        @has_selection = false
+      end
+    end
+
+    private def update_keyboard_selection(selecting : Bool) : Nil
+      if selecting && @has_selection
+        @selection_end = SelectionPos.new(@cursor_line, @cursor_col)
+      end
+    end
+
+    private def line_length(line_idx : Int32) : Int32
+      return 0 if line_idx < 0 || line_idx >= @rendered_lines.size
+      @rendered_lines[line_idx].sum { |seg| seg[0].size }
+    end
+
+    private def ensure_cursor_visible : Nil
+      # Vertical scroll
+      if @cursor_line < @scroll_y
+        @scroll_y = @cursor_line
+      elsif @cursor_line >= @scroll_y + @rect.height
+        @scroll_y = @cursor_line - @rect.height + 1
+      end
+
+      # Horizontal scroll (if enabled)
+      if @horizontal_scroll_enabled
+        if @cursor_col < @scroll_x
+          @scroll_x = @cursor_col
+        elsif @cursor_col >= @scroll_x + @rect.width - 2  # Account for scrollbar
+          @scroll_x = @cursor_col - @rect.width + 3
+        end
+      end
+    end
+
+    def select_all : Nil
+      return if @rendered_lines.empty?
+      @selection_start = SelectionPos.new(0, 0)
+      last_line = @rendered_lines.size - 1
+      @selection_end = SelectionPos.new(last_line, line_length(last_line))
+      @cursor_line = last_line
+      @cursor_col = line_length(last_line)
+      @has_selection = true
+      mark_dirty!
     end
 
     # Pre-render to line buffer
@@ -762,6 +893,12 @@ module Tui
         render_to_lines
       end
 
+      # Handle deferred scroll to bottom (for session loading)
+      if @scroll_to_bottom_pending && @rect.height > 0
+        @scroll_y = max_scroll
+        @scroll_to_bottom_pending = false
+      end
+
       # CRITICAL: Invalidate the entire region to force terminal update
       # This ensures ghost characters from previous frames are always cleared
       buffer.invalidate_region(@rect.x, @rect.y, @rect.width, @rect.height)
@@ -830,6 +967,11 @@ module Tui
                   final_style = Style.new(fg: final_style.fg, bg: @selection_bg, attrs: final_style.attrs)
                 end
 
+                # Apply cursor highlight (inverted colors)
+                if @show_cursor && line_idx == @cursor_line && char_idx == @cursor_col
+                  final_style = Style.new(fg: Color.black, bg: Color.palette(250), attrs: final_style.attrs)
+                end
+
                 # Check if character fits in viewport
                 if visible_start + char_w <= content_width
                   buffer.set_wide(x, y, text, final_style)
@@ -847,6 +989,15 @@ module Tui
 
           # Stop if we've rendered past the viewport
           break if screen_col >= content_width && virtual_col > @scroll_x + content_width
+        end
+
+        # Draw cursor at end of line if cursor position is past all characters
+        if @show_cursor && line_idx == @cursor_line && char_idx == @cursor_col
+          cursor_x_pos = virtual_col - @scroll_x
+          if cursor_x_pos >= 0 && cursor_x_pos < content_width
+            cursor_style = Style.new(fg: Color.black, bg: Color.palette(250))
+            buffer.set(content_x + cursor_x_pos, y, ' ', cursor_style)
+          end
         end
       end
 
@@ -1107,68 +1258,87 @@ module Tui
     def on_event(event : Event) : Bool
       case event
       when KeyEvent
+        selecting = event.shift?
+
         case event.key
         when .up?
-          scroll_up
+          move_cursor_up(selecting)
           event.stop!
           return true
         when .down?
-          scroll_down
+          move_cursor_down(selecting)
           event.stop!
           return true
         when .left?
-          if @horizontal_scroll_enabled && @content_width > @rect.width
-            scroll_left
-            event.stop!
-            return true
-          end
+          move_cursor_left(selecting)
+          event.stop!
+          return true
         when .right?
-          if @horizontal_scroll_enabled && @content_width > @rect.width
-            scroll_right
-            event.stop!
-            return true
-          end
+          move_cursor_right(selecting)
+          event.stop!
+          return true
         when .page_up?
-          page_up
+          page_height = [@rect.height - 1, 1].max
+          page_height.times { move_cursor_up(selecting) }
           event.stop!
           return true
         when .page_down?
-          page_down
+          page_height = [@rect.height - 1, 1].max
+          page_height.times { move_cursor_down(selecting) }
           event.stop!
           return true
         when .home?
-          scroll_to_top
-          scroll_to_left if @horizontal_scroll_enabled
+          if event.ctrl?
+            # Ctrl+Home - document start
+            move_cursor_to(0, 0, selecting)
+          else
+            # Home - line start
+            move_cursor_to(@cursor_line, 0, selecting)
+          end
           event.stop!
           return true
         when .end?
-          scroll_to_bottom
+          if event.ctrl?
+            # Ctrl+End - document end
+            last_line = [@rendered_lines.size - 1, 0].max
+            move_cursor_to(last_line, line_length(last_line), selecting)
+          else
+            # End - line end
+            move_cursor_to(@cursor_line, line_length(@cursor_line), selecting)
+          end
           event.stop!
           return true
         end
 
-        # j/k/h/l vim-style scrolling
+        # j/k/h/l vim-style navigation
         if event.char == 'j'
-          scroll_down
+          move_cursor_down(selecting)
           event.stop!
           return true
         elsif event.char == 'k'
-          scroll_up
+          move_cursor_up(selecting)
           event.stop!
           return true
-        elsif event.char == 'h' && @horizontal_scroll_enabled && @content_width > @rect.width
-          scroll_left
+        elsif event.char == 'h'
+          move_cursor_left(selecting)
           event.stop!
           return true
-        elsif event.char == 'l' && @horizontal_scroll_enabled && @content_width > @rect.width
-          scroll_right
+        elsif event.char == 'l'
+          move_cursor_right(selecting)
           event.stop!
           return true
         end
 
-        # Ctrl+C / Cmd+C to copy selection
+        # Ctrl+C to copy selection
         if event.matches?("ctrl+c") && @has_selection
           copy_selection_to_clipboard
+          event.stop!
+          return true
+        end
+
+        # Ctrl+A to select all
+        if event.matches?("ctrl+a")
+          select_all
           event.stop!
           return true
         end
