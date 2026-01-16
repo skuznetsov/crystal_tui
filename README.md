@@ -18,7 +18,7 @@ Add to your `shard.yml`:
 ```yaml
 dependencies:
   tui:
-    github: sergeyklay/crystal_tui
+    github: skuznetsov/crystal_tui
 ```
 
 Then run:
