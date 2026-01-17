@@ -64,7 +64,6 @@ module Tui::ANSI
     String.build do |s|
       s << "#{CSI}?1000h"  # Basic mouse
       s << "#{CSI}?1002h"  # Button event tracking
-      s << "#{CSI}?1003h"  # Any event tracking
       s << "#{CSI}?1006h"  # SGR extended mode
     end
   end
@@ -72,7 +71,6 @@ module Tui::ANSI
   def self.disable_mouse : String
     String.build do |s|
       s << "#{CSI}?1006l"
-      s << "#{CSI}?1003l"
       s << "#{CSI}?1002l"
       s << "#{CSI}?1000l"
     end
