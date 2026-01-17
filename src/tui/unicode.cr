@@ -9,6 +9,21 @@ end
 
 module Tui
   module Unicode
+    # Ambiguous-width symbols (emoji/dingbats) can be 1 or 2 columns depending on terminal.
+    # Enable wide rendering by setting TUI_AMBIGUOUS_WIDE=1 (or true/yes).
+    @@ambiguous_wide : Bool = begin
+      value = ENV["TUI_AMBIGUOUS_WIDE"]?.to_s.downcase
+      value == "1" || value == "true" || value == "yes"
+    end
+
+    def self.ambiguous_wide? : Bool
+      @@ambiguous_wide
+    end
+
+    def self.ambiguous_wide=(value : Bool) : Bool
+      @@ambiguous_wide = value
+    end
+
     # Zero-width character ranges (combining marks, control chars, format chars)
     # From wcwidth table_zero.py
     ZERO_WIDTH = [
@@ -479,14 +494,14 @@ module Tui
       sys_width = LibC.wcwidth(codepoint)
       if sys_width >= 0
         # Override when terminals render emoji/symbols as wide but wcwidth reports 1.
-        if sys_width == 1 && (in_ranges?(codepoint, WIDE_CHARS) || in_ranges?(codepoint, EMOJI_WIDE))
+        if sys_width == 1 && (in_ranges?(codepoint, WIDE_CHARS) || (ambiguous_wide? && in_ranges?(codepoint, EMOJI_WIDE)))
           return 2
         end
         return sys_width
       end
 
       # Wide characters (CJK, emoji, etc.)
-      return 2 if in_ranges?(codepoint, WIDE_CHARS) || in_ranges?(codepoint, EMOJI_WIDE)
+      return 2 if in_ranges?(codepoint, WIDE_CHARS) || (ambiguous_wide? && in_ranges?(codepoint, EMOJI_WIDE))
 
       # Default: 1 width (printable ASCII, Latin, Greek, Cyrillic, etc.)
       1
