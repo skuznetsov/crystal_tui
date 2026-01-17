@@ -500,7 +500,7 @@ module Tui
 
     private def line_length(line_idx : Int32) : Int32
       return 0 if line_idx < 0 || line_idx >= @rendered_lines.size
-      @rendered_lines[line_idx].sum { |seg| seg[0].size }
+      @rendered_lines[line_idx].size
     end
 
     private def ensure_cursor_visible : Nil
@@ -1343,7 +1343,7 @@ module Tui
     def on_event(event : Event) : Bool
       case event
       when KeyEvent
-        selecting = event.shift?
+        selecting = event.modifiers.shift?
 
         case event.key
         when .up?
