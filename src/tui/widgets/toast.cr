@@ -19,14 +19,14 @@ module Tui
       property text : String
       property level : Level
       property duration : Time::Span
-      property created_at : Time::Span
+      property created_at : Time::Instant
 
       def initialize(@text : String, @level : Level = Level::Info, @duration : Time::Span = 3.seconds)
-        @created_at = Time.monotonic
+        @created_at = Time.instant
       end
 
       def expired? : Bool
-        Time.monotonic - @created_at > @duration
+        Time.instant - @created_at > @duration
       end
     end
 

@@ -264,16 +264,16 @@ module Tui
     end
 
     @input_buffer : String = ""
-    @input_timer : Int64 = 0
+    @input_timer : Time::Instant?
 
     private def input_digit(digit : Int32) : Nil
-      now_ms = Time.monotonic.total_milliseconds.to_i64
+      now = Time.instant
 
       # Reset buffer if too much time passed (500ms)
-      if now_ms - @input_timer > 500
+      if (last = @input_timer) && (now - last) > 500.milliseconds
         @input_buffer = ""
       end
-      @input_timer = now_ms
+      @input_timer = now
 
       @input_buffer += digit.to_s
 
