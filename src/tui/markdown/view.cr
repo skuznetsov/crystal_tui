@@ -134,15 +134,25 @@ module Tui
       content_line = @scroll_y + (screen_y - @rect.y)
       content_line = content_line.clamp(0, (@rendered_lines.size - 1).clamp(0, Int32::MAX))
 
-      # Convert screen X to content column
-      content_col = screen_x - @rect.x
+      # Convert screen X to content column (grapheme index)
       if line = @rendered_lines[content_line]?
-        content_col = content_col.clamp(0, line.size)
-      else
-        content_col = 0
-      end
+        content_x = @rect.x + @padding_left
+        target_x = (screen_x - content_x) + @scroll_x
+        target_x = [target_x, 0].max
 
-      SelectionPos.new(content_line, content_col)
+        virtual_x = 0
+        col_idx = 0
+        line.each do |(text, _)|
+          char_w = Unicode.grapheme_width(text)
+          break if virtual_x + char_w > target_x
+          virtual_x += char_w
+          col_idx += 1
+        end
+
+        SelectionPos.new(content_line, col_idx.clamp(0, line.size))
+      else
+        SelectionPos.new(content_line, 0)
+      end
     end
 
     # Get ordered selection bounds (start < end)
@@ -372,9 +382,8 @@ module Tui
     end
 
     private def max_scroll_x : Int32
-      has_v_scrollbar = @content_height > @rect.height
-      viewport_width = has_v_scrollbar ? @rect.width - 1 : @rect.width
-      (@content_width - viewport_width).clamp(0, Int32::MAX)
+      state = viewport_state
+      (@content_width - state[:width]).clamp(0, Int32::MAX)
     end
 
     def scroll_to_top : Nil
@@ -395,15 +404,16 @@ module Tui
     end
 
     def page_up : Nil
-      scroll_up(@rect.height)
+      scroll_up(viewport_state[:height])
     end
 
     def page_down : Nil
-      scroll_down(@rect.height)
+      scroll_down(viewport_state[:height])
     end
 
     private def max_scroll : Int32
-      (@content_height - @rect.height).clamp(0, Int32::MAX)
+      state = viewport_state
+      (@content_height - state[:height]).clamp(0, Int32::MAX)
     end
 
     # ─────────────────────────────────────────────────────────────
@@ -494,20 +504,52 @@ module Tui
     end
 
     private def ensure_cursor_visible : Nil
+      state = viewport_state
+      visible_height = state[:height]
+      visible_width = state[:width]
+
       # Vertical scroll
       if @cursor_line < @scroll_y
         @scroll_y = @cursor_line
-      elsif @cursor_line >= @scroll_y + @rect.height
-        @scroll_y = @cursor_line - @rect.height + 1
+      elsif @cursor_line >= @scroll_y + visible_height
+        @scroll_y = @cursor_line - visible_height + 1
       end
 
       # Horizontal scroll (if enabled)
       if @horizontal_scroll_enabled
         if @cursor_col < @scroll_x
           @scroll_x = @cursor_col
-        elsif @cursor_col >= @scroll_x + @rect.width - 2  # Account for scrollbar
-          @scroll_x = @cursor_col - @rect.width + 3
+        elsif @cursor_col >= @scroll_x + visible_width
+          @scroll_x = @cursor_col - visible_width + 1
         end
+      end
+    end
+
+    private def viewport_state : NamedTuple(has_v: Bool, has_h: Bool, width: Int32, height: Int32)
+      has_v = false
+      has_h = false
+      width = @rect.width - @padding_left - @padding_right
+      height = @rect.height
+
+      2.times do
+        width = @rect.width - (has_v ? 1 : 0) - @padding_left - @padding_right
+        width = [width, 0].max
+        has_h = @horizontal_scroll_enabled && @content_width > width
+        height = @rect.height - (has_h ? 1 : 0)
+        height = [height, 0].max
+        has_v = @content_height > height
+      end
+
+      {has_v: has_v, has_h: has_h, width: width, height: height}
+    end
+
+    private def scrollbar_track(rect : Rect, visible_height : Int32) : {start: Int32, height: Int32}
+      height = [visible_height, rect.height].min
+      height = [height, 0].max
+      if height >= 3
+        {start: rect.y + 1, height: height - 2}
+      else
+        {start: rect.y, height: height}
       end
     end
 
@@ -906,14 +948,11 @@ module Tui
       # Determine background: explicit @background > @text_style.bg > nil (parent controls)
       clear_bg = @background || @text_style.bg
 
-      # Check scrollbar requirements
-      has_v_scrollbar = @content_height > @rect.height
-      has_h_scrollbar = @horizontal_scroll_enabled && @content_width > @rect.width
-
-      # Calculate visible area (reduce for scrollbars and padding)
-      visible_height = has_h_scrollbar ? @rect.height - 1 : @rect.height
-      scrollbar_width = has_v_scrollbar ? 1 : 0
-      content_width = @rect.width - scrollbar_width - @padding_left - @padding_right
+      state = viewport_state
+      has_v_scrollbar = state[:has_v]
+      has_h_scrollbar = state[:has_h]
+      visible_height = state[:height]
+      content_width = state[:width]
       content_x = @rect.x + @padding_left
 
       # Clamp scroll positions
@@ -1025,7 +1064,7 @@ module Tui
 
       # Register vertical scrollbar to be drawn AFTER all widgets render
       if has_v_scrollbar
-        register_scrollbar_overlay(buffer)
+        register_scrollbar_overlay(buffer, visible_height)
       end
     end
 
@@ -1034,59 +1073,69 @@ module Tui
       return if viewport_width <= 2 || @content_width <= 0
 
       y = @rect.bottom - 1
-      scrollbar_x = @rect.x + @padding_left
-      scrollbar_width = viewport_width
+      scrollbar_x = @rect.x
+      scrollbar_width = viewport_width + @padding_left + @padding_right
 
-      # Calculate thumb size and position
-      visible_ratio = viewport_width.to_f / @content_width
-      thumb_size = (scrollbar_width * visible_ratio).to_i.clamp(2, scrollbar_width)
-      scroll_ratio = max_scroll > 0 ? @scroll_x.to_f / max_scroll : 0.0
-      thumb_pos = ((scrollbar_width - thumb_size) * scroll_ratio).to_i
-
-      # Draw scrollbar track and thumb (matching vertical scrollbar style)
       track_style = Style.new(fg: Color.palette(238))
       thumb_style = Style.new(fg: Color.palette(244))
 
-      scrollbar_width.times do |i|
-        x = scrollbar_x + i
+      left_x = scrollbar_x
+      right_x = scrollbar_x + scrollbar_width - 1
+      buffer.set(left_x, y, '◀', track_style) if clip.contains?(left_x, y)
+      buffer.set(right_x, y, '▶', track_style) if clip.contains?(right_x, y)
+
+      track_width = scrollbar_width - 2
+      return if track_width <= 0
+
+      track_x = scrollbar_x + 1
+      visible_ratio = viewport_width.to_f / @content_width
+      thumb_size = (track_width * visible_ratio).to_i.clamp(2, track_width)
+      scroll_ratio = max_scroll > 0 ? @scroll_x.to_f / max_scroll : 0.0
+      thumb_pos = ((track_width - thumb_size) * scroll_ratio).to_i
+
+      track_width.times do |i|
+        x = track_x + i
         next unless clip.contains?(x, y)
 
         is_thumb = i >= thumb_pos && i < thumb_pos + thumb_size
-        char = is_thumb ? '▄' : '░'  # ▄ for thumb (horizontal), ░ for track
+        char = is_thumb ? '▄' : '░'
         style = is_thumb ? thumb_style : track_style
         buffer.set(x, y, char, style)
       end
     end
 
     # Register scrollbar drawing as a post-render overlay
-    private def register_scrollbar_overlay(buffer : Buffer) : Nil
+    private def register_scrollbar_overlay(buffer : Buffer, visible_height : Int32) : Nil
       # Capture the rect and scroll state for the overlay
       rect = @rect
       scroll_y = @scroll_y
       content_height = @content_height
       max_scroll_val = max_scroll
+      viewport_height = visible_height
 
       Tui.register_scrollbar do |buf, clip|
-        draw_scrollbar_overlay(buf, rect, scroll_y, content_height, max_scroll_val)
+        draw_scrollbar_overlay(buf, rect, scroll_y, content_height, max_scroll_val, viewport_height)
       end
     end
 
     # Draw scrollbar (called from overlay system, after all widgets render)
-    private def draw_scrollbar_overlay(buffer : Buffer, rect : Rect, scroll_y : Int32, content_height : Int32, max_scroll_val : Int32) : Nil
+    private def draw_scrollbar_overlay(buffer : Buffer, rect : Rect, scroll_y : Int32, content_height : Int32, max_scroll_val : Int32, visible_height : Int32) : Nil
       return if rect.height <= 0 || content_height <= 0
       return if rect.width <= 1
 
       sx = rect.right - 1
-      track_height = rect.height
+      track = scrollbar_track(rect, visible_height)
+      track_height = track[:height]
+      track_start = track[:start]
 
       return if sx < rect.x || sx >= rect.x + rect.width
 
       # CRITICAL: Force terminal update for scrollbar column
       # This ensures no artifacts from previous renders
-      buffer.invalidate_region(sx, rect.y, 1, track_height)
+      buffer.invalidate_region(sx, rect.y, 1, visible_height)
 
       # Calculate thumb position and size
-      thumb_height = (track_height.to_f * rect.height / content_height).clamp(1, track_height).to_i
+      thumb_height = (track_height.to_f * visible_height / content_height).clamp(1, track_height).to_i
       thumb_pos = if max_scroll_val > 0
                     (scroll_y.to_f / max_scroll_val * (track_height - thumb_height)).to_i
                   else
@@ -1097,11 +1146,16 @@ module Tui
       thumb_style = Style.new(fg: Color.palette(244))
 
       track_height.times do |i|
-        y = rect.y + i
+        y = track_start + i
         is_thumb = i >= thumb_pos && i < thumb_pos + thumb_height
         char = is_thumb ? '█' : '░'
         style = is_thumb ? thumb_style : track_style
         buffer.set(sx, y, char, style)
+      end
+
+      if visible_height >= 2
+        buffer.set(sx, rect.y, '▲', track_style)
+        buffer.set(sx, rect.y + visible_height - 1, '▼', track_style)
       end
     end
 
@@ -1112,7 +1166,7 @@ module Tui
 
     # Check if scrollbar is visible
     private def has_scrollbar? : Bool
-      @content_height > @rect.height
+      @content_height > viewport_state[:height]
     end
 
     # Get scrollbar X position
@@ -1124,29 +1178,41 @@ module Tui
     # Allow ±1 tolerance to handle terminal coordinate system differences
     private def on_scrollbar?(x : Int32, y : Int32) : Bool
       return false unless has_scrollbar?
-      return false unless y >= @rect.y && y < @rect.bottom
+      return false unless y >= @rect.y && y < (@rect.y + viewport_state[:height])
       sx = scrollbar_x
       x >= sx && x <= sx + 1  # Check scrollbar position and one to the right
     end
 
     # Get scrollbar thumb position and height
-    private def scrollbar_thumb_info : {pos: Int32, height: Int32}
-      track_height = @rect.height
-      thumb_height = (track_height.to_f * @rect.height / @content_height).clamp(1, track_height).to_i
+    private def scrollbar_thumb_info : {pos: Int32, height: Int32, start: Int32}
+      visible_height = viewport_state[:height]
+      track = scrollbar_track(@rect, visible_height)
+      thumb_height = (track[:height].to_f * visible_height / @content_height).clamp(1, track[:height]).to_i
       thumb_pos = if max_scroll > 0
-                    (@scroll_y.to_f / max_scroll * (track_height - thumb_height)).to_i
+                    (@scroll_y.to_f / max_scroll * (track[:height] - thumb_height)).to_i
                   else
                     0
                   end
-      {pos: thumb_pos, height: thumb_height}
+      {pos: thumb_pos, height: thumb_height, start: track[:start]}
     end
 
     # Handle scrollbar click - returns true if handled
     private def handle_scrollbar_click(screen_y : Int32) : Bool
       return false unless has_scrollbar?
 
-      rel_y = screen_y - @rect.y
+      visible_height = viewport_state[:height]
+      if visible_height >= 2
+        if screen_y == @rect.y
+          scroll_up(1)
+          return true
+        elsif screen_y == @rect.y + visible_height - 1
+          scroll_down(1)
+          return true
+        end
+      end
+
       thumb = scrollbar_thumb_info
+      rel_y = screen_y - thumb[:start]
 
       if rel_y < thumb[:pos]
         # Click above thumb - page up
@@ -1169,8 +1235,8 @@ module Tui
     private def handle_scrollbar_drag(screen_y : Int32) : Bool
       return false unless @scrollbar_dragging
 
-      track_height = @rect.height
       thumb = scrollbar_thumb_info
+      track_height = scrollbar_track(@rect, viewport_state[:height])[:height]
 
       # Calculate scroll delta based on mouse movement
       delta_y = screen_y - @scrollbar_drag_start_y
@@ -1189,19 +1255,25 @@ module Tui
 
     # Check if click is on horizontal scrollbar
     private def on_h_scrollbar?(x : Int32, y : Int32) : Bool
-      return false unless @horizontal_scroll_enabled && @content_width > @rect.width
+      return false unless viewport_state[:has_h]
       return false unless y == @rect.bottom - 1  # Horizontal scrollbar is at bottom
-      return false unless x >= @rect.x + @padding_left && x < @rect.right - 1
+      bar_width = viewport_state[:width] + @padding_left + @padding_right
+      return false unless x >= @rect.x && x < (@rect.x + bar_width)
       true
     end
 
     # Get horizontal scrollbar thumb position and width
     private def h_scrollbar_thumb_info : {pos: Int32, width: Int32}
-      viewport_width = @rect.width - @padding_left - @padding_right - 1  # -1 for vertical scrollbar
-      thumb_width = (viewport_width.to_f * viewport_width / @content_width).clamp(2, viewport_width).to_i
+      viewport_width = viewport_state[:width]
+      bar_width = viewport_width + @padding_left + @padding_right
+      track_width = bar_width - 2
+      track_width = [track_width, 0].max
+      return {pos: 0, width: 0} if track_width <= 0 || @content_width <= 0
+      visible_ratio = viewport_width.to_f / @content_width
+      thumb_width = (track_width * visible_ratio).to_i.clamp(2, track_width)
       max_h_scroll = (@content_width - viewport_width).clamp(0, Int32::MAX)
-      thumb_pos = if max_h_scroll > 0
-                    (@scroll_x.to_f / max_h_scroll * (viewport_width - thumb_width)).to_i
+      thumb_pos = if max_h_scroll > 0 && track_width > 0
+                    (@scroll_x.to_f / max_h_scroll * (track_width - thumb_width)).to_i
                   else
                     0
                   end
@@ -1210,16 +1282,28 @@ module Tui
 
     # Handle horizontal scrollbar click
     private def handle_h_scrollbar_click(screen_x : Int32) : Bool
-      return false unless @horizontal_scroll_enabled && @content_width > @rect.width
+      state = viewport_state
+      return false unless state[:has_h]
 
-      rel_x = screen_x - @rect.x - @padding_left
+      rel_x = screen_x - @rect.x
+      bar_width = state[:width] + @padding_left + @padding_right
+      if rel_x == 0
+        scroll_left(state[:width] // 4)
+        return true
+      elsif rel_x == bar_width - 1
+        scroll_right(state[:width] // 4)
+        return true
+      end
       thumb = h_scrollbar_thumb_info
-      viewport_width = @rect.width - @padding_left - @padding_right - 1
+      viewport_width = state[:width]
 
-      if rel_x < thumb[:pos]
+      thumb_start = thumb[:pos] + 1
+      thumb_end = thumb_start + thumb[:width] - 1
+
+      if rel_x < thumb_start
         # Click left of thumb - scroll left
         scroll_left(viewport_width // 2)
-      elsif rel_x >= thumb[:pos] + thumb[:width]
+      elsif rel_x > thumb_end
         # Click right of thumb - scroll right
         scroll_right(viewport_width // 2)
       else
@@ -1236,7 +1320,8 @@ module Tui
     private def handle_h_scrollbar_drag(screen_x : Int32) : Bool
       return false unless @h_scrollbar_dragging
 
-      viewport_width = @rect.width - @padding_left - @padding_right - 1
+      viewport_width = viewport_state[:width]
+      bar_width = viewport_width + @padding_left + @padding_right
       thumb = h_scrollbar_thumb_info
       max_h_scroll = (@content_width - viewport_width).clamp(0, Int32::MAX)
 
@@ -1244,7 +1329,7 @@ module Tui
       delta_x = screen_x - @h_scrollbar_drag_start_x
 
       # Map pixel delta to scroll delta
-      scrollable_track = viewport_width - thumb[:width]
+      scrollable_track = bar_width - thumb[:width] - 2
       if scrollable_track > 0
         scroll_per_pixel = max_h_scroll.to_f / scrollable_track
         new_scroll = (@h_scrollbar_drag_start_scroll + delta_x * scroll_per_pixel).to_i
@@ -1278,12 +1363,12 @@ module Tui
           event.stop!
           return true
         when .page_up?
-          page_height = [@rect.height - 1, 1].max
+          page_height = [viewport_state[:height], 1].max
           page_height.times { move_cursor_up(selecting) }
           event.stop!
           return true
         when .page_down?
-          page_height = [@rect.height - 1, 1].max
+          page_height = [viewport_state[:height], 1].max
           page_height.times { move_cursor_down(selecting) }
           event.stop!
           return true
@@ -1390,9 +1475,11 @@ module Tui
             end
             return true if header_clicked
 
-            # Start text selection
-            @selection_start = screen_to_content_pos(event.x, event.y)
-            @selection_end = @selection_start
+            # Move cursor to click position and start selection
+            pos = screen_to_content_pos(event.x, event.y)
+            move_cursor_to(pos.line, pos.col, false)
+            @selection_start = pos
+            @selection_end = pos
             @selecting = true
             @has_selection = false  # No selection until drag
             mark_dirty!
