@@ -230,26 +230,25 @@ module Tui
 
       while @running
         # Wait for either input event or timer tick
-        select
-        when event = @input.events.receive?
-          if event
+        begin
+          select
+          when event = @input.events.receive
             handle_event(event)
             # Render after event if dirty
             if dirty?
               layout_children
               render_all
             end
-          else
-            # Channel closed
-            break
+          when timer.receive
+            # Timer tick - check for resize
+            check_resize
+            if dirty?
+              layout_children
+              render_all
+            end
           end
-        when timer.receive?
-          # Timer tick - check for resize
-          check_resize
-          if dirty?
-            layout_children
-            render_all
-          end
+        rescue Channel::ClosedError
+          break
         end
       end
 
