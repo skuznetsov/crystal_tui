@@ -240,9 +240,17 @@ module Tui
           advance
         end
 
-        # Generate stable ID based on content (summary + first line of content)
-        # This ensures the ID remains stable even if new details blocks are added elsewhere
-        content_preview = content_lines.first(2).join(" ")[0, 50]
+        # Generate stable ID based on a content preview
+        # Use first non-empty, non-fence lines to reduce collisions for tool outputs.
+        preview_lines = [] of String
+        content_lines.each do |line|
+          stripped = line.strip
+          next if stripped.empty?
+          next if stripped.starts_with?("```")
+          preview_lines << stripped
+          break if preview_lines.size >= 5
+        end
+        content_preview = preview_lines.join(" ")[0, 200]
         stable_key = "#{summary}:#{content_preview}"
         details_id = "details-#{stable_key.hash.abs}"
 
@@ -497,41 +505,62 @@ module Tui
     # unclosed markers from affecting subsequent content
     def self.sanitize_unclosed(text : String) : String
       result = text
+      chars = text.chars
+      in_fence = false
+      in_inline = false
+      inline_ticks = 0
+      outside = String.build do |io|
+        i = 0
+        while i < chars.size
+          if !in_inline && i + 2 < chars.size &&
+             chars[i] == '`' && chars[i + 1] == '`' && chars[i + 2] == '`'
+            in_fence = !in_fence
+            i += 3
+            next
+          end
+
+          if !in_fence && chars[i] == '`'
+            inline_ticks += 1
+            in_inline = !in_inline
+            i += 1
+            next
+          end
+
+          io << chars[i] unless in_fence || in_inline
+          i += 1
+        end
+      end
+
+      # Close unclosed fenced code block if needed
+      result += "\n```" if in_fence
 
       # Track markers that need closing (in order of specificity)
       # Check *** before ** before *
 
-      # Count unmatched *** (bold+italic)
-      bold_italic_opens = result.scan(/(?<!\*)\*\*\*(?!\*)/).size
-      bold_italic_closes = result.scan(/(?<!\*)\*\*\*(?!\*)/).size
-      # Since *** is symmetric, we check if total count is odd
-      if result.scan(/(?<!\*)\*\*\*(?!\*)/).size.odd?
+      # Count unmatched *** (bold+italic) outside code
+      if outside.scan(/(?<!\*)\*\*\*(?!\*)/).size.odd?
         result += "***"
       end
 
       # Count unmatched ** (bold) - exclude *** patterns
-      # Use gsub to temporarily remove *** patterns for counting
-      temp = result.gsub(/\*\*\*/, "XXX")
+      temp = outside.gsub(/\*\*\*/, "XXX")
       if temp.scan(/(?<!\*)\*\*(?!\*)/).size.odd?
         result += "**"
       end
 
       # Count unmatched * (italic) - exclude ** and *** patterns
-      temp = result.gsub(/\*\*\*/, "XXX").gsub(/\*\*/, "XX")
+      temp = outside.gsub(/\*\*\*/, "XXX").gsub(/\*\*/, "XX")
       if temp.scan(/(?<!\*)\*(?!\*)/).size.odd?
         result += "*"
       end
 
       # Count unmatched ~~ (strikethrough)
-      if result.scan(/~~/).size.odd?
+      if outside.scan(/~~/).size.odd?
         result += "~~"
       end
 
-      # Count unmatched ` (inline code) - exclude ``` patterns
-      temp = result.gsub(/```/, "XXX")
-      if temp.scan(/(?<!`)`(?!`)/).size.odd?
-        result += "`"
-      end
+      # Count unmatched ` (inline code) outside fenced blocks
+      result += "`" if inline_ticks.odd?
 
       result
     end
