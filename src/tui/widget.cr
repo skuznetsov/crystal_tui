@@ -384,6 +384,9 @@ module Tui
       when KeyEvent
         # For key events, target is the focused widget (or self if none)
         Widget.focused_widget || self
+      when PasteEvent
+        # Paste events should go to the focused widget (or self if none)
+        Widget.focused_widget || self
       else
         # For other events, target is self (root)
         self

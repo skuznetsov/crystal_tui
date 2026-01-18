@@ -261,25 +261,29 @@ module Tui
 
     def paste(text : String) : Nil
       delete_selection if @selection
-      lines = text.lines
-      if lines.size == 1
-        insert_text(lines.first)
-      else
-        # Multi-line paste
-        current_line = @lines[@cursor.line]
-        before = current_line[0, @cursor.col]
-        after = current_line[@cursor.col..]
 
-        @lines[@cursor.line] = before + lines.first
-        lines[1...-1].each_with_index do |line, i|
-          @lines.insert(@cursor.line + 1 + i, line)
+      normalized = normalize_newlines(text)
+      return if normalized.empty?
+
+      normalized.each_char do |char|
+        if char == '\n'
+          line = @lines[@cursor.line]
+          @lines[@cursor.line] = line[0, @cursor.col]
+          @lines.insert(@cursor.line + 1, line[@cursor.col..])
+          @cursor.line += 1
+          @cursor.col = 0
+        else
+          line = @lines[@cursor.line]
+          @lines[@cursor.line] = line[0, @cursor.col] + char + line[@cursor.col..]
+          @cursor.col += 1
         end
-        @lines.insert(@cursor.line + lines.size - 1, lines.last + after)
-
-        @cursor.line += lines.size - 1
-        @cursor.col = lines.last.size
-        text_changed
       end
+
+      text_changed
+    end
+
+    private def normalize_newlines(text : String) : String
+      text.gsub("\r\n", "\n").gsub("\r", "\n")
     end
 
     # Cursor movement
@@ -596,6 +600,10 @@ module Tui
       return false unless focused?
 
       case event
+      when PasteEvent
+        paste(event.text)
+        event.stop!
+        return true
       when KeyEvent
         if handle_key(event)
           event.stop!

@@ -509,19 +509,29 @@ module Tui
       visible_width = state[:width]
 
       # Vertical scroll
-      if @cursor_line < @scroll_y
-        @scroll_y = @cursor_line
-      elsif @cursor_line >= @scroll_y + visible_height
-        @scroll_y = @cursor_line - visible_height + 1
+      next_scroll_y = @scroll_y
+      if @cursor_line < next_scroll_y
+        next_scroll_y = @cursor_line
+      elsif @cursor_line >= next_scroll_y + visible_height
+        next_scroll_y = @cursor_line - visible_height + 1
       end
+      next_scroll_y = next_scroll_y.clamp(0, max_scroll)
 
       # Horizontal scroll (if enabled)
+      next_scroll_x = @scroll_x
       if @horizontal_scroll_enabled
-        if @cursor_col < @scroll_x
-          @scroll_x = @cursor_col
-        elsif @cursor_col >= @scroll_x + visible_width
-          @scroll_x = @cursor_col - visible_width + 1
+        if @cursor_col < next_scroll_x
+          next_scroll_x = @cursor_col
+        elsif @cursor_col >= next_scroll_x + visible_width
+          next_scroll_x = @cursor_col - visible_width + 1
         end
+        next_scroll_x = next_scroll_x.clamp(0, max_scroll_x)
+      end
+
+      if next_scroll_y != @scroll_y || next_scroll_x != @scroll_x
+        @scroll_y = next_scroll_y
+        @scroll_x = next_scroll_x
+        mark_dirty!
       end
     end
 
@@ -714,29 +724,46 @@ module Tui
       top_line << {"┐", @code_block_border}
       @rendered_lines << top_line
 
-      # Code lines
+      # Code lines (wrap instead of truncating)
       code.lines.each do |code_line|
         line = [] of Tuple(String, Style)
-        line << {"│", @code_block_border}
-        line << {" ", @code_block_style}
+        display_width = 0
 
-        # Track display width (not character count) for proper alignment
-        display_width = 2  # │ + space
+        # Helper to start a new wrapped code line.
+        start_line = ->{
+          line = [] of Tuple(String, Style)
+          line << {"│", @code_block_border}
+          line << {" ", @code_block_style}
+          display_width = 2  # │ + space
+          {line, display_width}
+        }
+
+        # Helper to finalize/pad a code line.
+        finish_line = ->(current_line : Array(Tuple(String, Style)), current_width : Int32) {
+          while current_width < width - 1
+            current_line << {" ", @code_block_style}
+            current_width += 1
+          end
+          current_line << {"│", @code_block_border}
+          @rendered_lines << current_line
+        }
+
+        line, display_width = start_line.call
+
         code_line.each_grapheme do |g|
           grapheme = g.to_s
           char_w = Unicode.grapheme_width(grapheme)
-          break if display_width + char_w > width - 2  # Leave room for space + │
+
+          if display_width + char_w > width - 2
+            finish_line.call(line, display_width)
+            line, display_width = start_line.call
+          end
+
           line << {grapheme, @code_block_style}
           display_width += char_w
         end
 
-        # Pad to width using display width
-        while display_width < width - 1
-          line << {" ", @code_block_style}
-          display_width += 1
-        end
-        line << {"│", @code_block_border}
-        @rendered_lines << line
+        finish_line.call(line, display_width)
       end
 
       # Bottom border
@@ -797,18 +824,30 @@ module Tui
         content.lines.each do |content_line|
           line = [] of Tuple(String, Style)
           display_width = 0
-          line << {" ", @details_content_style}
-          display_width += 1
-          line << {" ", @details_content_style}
-          display_width += 1
-          line << {"│", Style.new(fg: Color.palette(240))}
-          display_width += 1
-          line << {" ", @details_content_style}
-          display_width += 1
+
+          start_line = ->{
+            line = [] of Tuple(String, Style)
+            display_width = 0
+            line << {" ", @details_content_style}
+            display_width += 1
+            line << {" ", @details_content_style}
+            display_width += 1
+            line << {"│", Style.new(fg: Color.palette(240))}
+            display_width += 1
+            line << {" ", @details_content_style}
+            display_width += 1
+            {line, display_width}
+          }
+
+          line, display_width = start_line.call
+
           content_line.each_grapheme do |g|
             grapheme = g.to_s
             char_w = Unicode.grapheme_width(grapheme)
-            break if display_width + char_w > width
+            if display_width + char_w > width
+              @rendered_lines << line
+              line, display_width = start_line.call
+            end
             line << {grapheme, @details_content_style}
             display_width += char_w
           end
@@ -1436,6 +1475,10 @@ module Tui
         end
 
       when MouseEvent
+        if event.action.press? && event.button.left? && event.in_rect?(@rect)
+          focus unless focused?
+        end
+
         if event.button.wheel_up?
           scroll_up(3)
           event.stop!
@@ -1528,8 +1571,6 @@ module Tui
           if @selecting
             @selecting = false
             if @has_selection
-              # Auto-copy to clipboard on selection complete
-              copy_selection_to_clipboard
             end
             event.stop!
             return true

@@ -4,6 +4,8 @@ module Tui::Terminal
 
   @@initialized : Bool = false
   @@original_blocking : Bool = true
+  @@sigint_pending : Bool = false
+  @@resize_channel : Channel(Nil) = Channel(Nil).new(1)
 
   # Width corrections from runtime calibration
   # Maps codepoint -> actual_terminal_width
@@ -31,6 +33,9 @@ module Tui::Terminal
     # Enable mouse
     STDOUT.print(ANSI.enable_mouse)
 
+    # Enable bracketed paste
+    STDOUT.print(ANSI.enable_bracketed_paste)
+
     # Clear screen
     STDOUT.print(ANSI.clear)
     STDOUT.print(ANSI.home)
@@ -49,6 +54,9 @@ module Tui::Terminal
     # Disable mouse
     STDOUT.print(ANSI.disable_mouse)
 
+    # Disable bracketed paste
+    STDOUT.print(ANSI.disable_bracketed_paste)
+
     # Show cursor
     STDOUT.print(ANSI.show_cursor)
 
@@ -60,6 +68,12 @@ module Tui::Terminal
     STDOUT.flush
 
     @@initialized = false
+  end
+
+  def consume_sigint : Bool
+    pending = @@sigint_pending
+    @@sigint_pending = false if pending
+    pending
   end
 
   # Check if terminal is initialized
@@ -123,16 +137,24 @@ module Tui::Terminal
     STDOUT.flush
   end
 
+  # Channel that receives resize notifications from SIGWINCH
+  def resize_channel : Channel(Nil)
+    @@resize_channel
+  end
+
   private def setup_signals : Nil
-    # Handle SIGWINCH for terminal resize
+    # Handle SIGWINCH for terminal resize - notify via channel
     Signal::WINCH.trap do
-      # Will be handled by event loop
+      select
+      when @@resize_channel.send(nil)
+      else
+        # Channel full, resize already pending
+      end
     end
 
     # Handle SIGINT and SIGTERM for clean shutdown
     Signal::INT.trap do
-      shutdown
-      exit(130)
+      @@sigint_pending = true
     end
 
     Signal::TERM.trap do

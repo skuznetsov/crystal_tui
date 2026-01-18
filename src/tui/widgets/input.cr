@@ -117,6 +117,10 @@ module Tui
       return false unless focused?
 
       case event
+      when PasteEvent
+        insert_paste(event.text)
+        event.stop!
+        return true
       when KeyEvent
         handled = handle_key(event)
         if handled
@@ -223,6 +227,14 @@ module Tui
       @cursor += 1
       @on_change.try &.call(@value)
       mark_dirty!
+    end
+
+    private def insert_paste(text : String) : Nil
+      normalized = text.gsub("\r\n", "\n").gsub("\r", "\n")
+      normalized.each_char do |char|
+        next if char == '\n'
+        insert_char(char)
+      end
     end
 
     private def delete_backward : Nil

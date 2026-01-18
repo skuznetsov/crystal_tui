@@ -217,42 +217,37 @@ module Tui
     end
 
     private def event_loop : Nil
-      # Create a timer channel for periodic tasks (resize check)
-      timer = Channel(Nil).new
-
-      # Timer fiber - sends tick every 100ms for resize checks
-      spawn(name: "tui-timer") do
-        while @running
-          sleep 100.milliseconds
-          timer.send(nil) rescue break
-        end
-      end
-
       while @running
-        # Wait for either input event or timer tick
         begin
+          # Adaptive timeout: short when dirty (responsive), long when idle (low CPU)
+          poll_timeout = dirty? ? 50.milliseconds : 5.seconds
+
+          # Wait for input or resize signal
           select
           when event = @input.events.receive
             handle_event(event)
-            # Render after event if dirty
-            if dirty?
-              layout_children
-              render_all
-            end
-          when timer.receive
-            # Timer tick - check for resize
+          when Terminal.resize_channel.receive
             check_resize
-            if dirty?
-              layout_children
-              render_all
-            end
+          when timeout(poll_timeout)
+            check_resize
+          end
+
+          if Terminal.consume_sigint
+            handle_event(KeyEvent.new('c', Modifiers::Ctrl))
+          end
+
+          if event = @input.flush_paste_burst
+            handle_event(event)
+          end
+
+          if dirty?
+            layout_children
+            render_all
           end
         rescue Channel::ClosedError
           break
         end
       end
-
-      timer.close
     end
 
     private def check_resize : Nil

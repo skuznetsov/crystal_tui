@@ -6,6 +6,16 @@ module Tui
     @running : Bool = false
     @input_fiber : Fiber?
     @input_provider : InputProvider
+    @paste_mode : Bool = false
+    @paste_buffer : Array(UInt8)
+    @pending_events : Array(Event)
+    @pending_burst : String
+    @pending_burst_at : Time::Instant?
+    @pending_burst_chars : Int32 = 0
+    @burst_active : Bool = false
+    @burst_buffer : String
+    @burst_last_at : Time::Instant?
+    @burst_window_until : Time::Instant?
 
     # Byte constants for parsing
     BYTE_0 = '0'.ord.to_u8
@@ -29,9 +39,18 @@ module Tui
     BYTE_BRACKET = '['.ord.to_u8
     BYTE_ESC = 27_u8
 
+    PASTE_END = [BYTE_ESC, BYTE_BRACKET, '2'.ord.to_u8, '0'.ord.to_u8, '1'.ord.to_u8, BYTE_TILDE]
+    BURST_MIN_CHARS = 3
+    BURST_CHAR_INTERVAL = 8.milliseconds
+    BURST_ENTER_SUPPRESS = 120.milliseconds
+
     def initialize(@input_provider : InputProvider = StdinInputProvider.new)
       @buffer = [] of UInt8
       @event_channel = Channel(Event).new(32)  # Buffered channel
+      @paste_buffer = [] of UInt8
+      @pending_events = [] of Event
+      @pending_burst = ""
+      @burst_buffer = ""
     end
 
     # Get/set the input provider (for testing)
@@ -75,6 +94,31 @@ module Tui
       end
     end
 
+    # Flush pending paste burst data if due (non-bracketed paste heuristic)
+    def flush_paste_burst : Event?
+      if event = pop_pending_event
+        return event
+      end
+
+      now = Time.instant
+
+      if @burst_active && burst_timed_out?(now)
+        event = PasteEvent.new(@burst_buffer)
+        reset_burst
+        return event
+      end
+
+      if !@pending_burst.empty? && pending_timed_out?(now)
+        enqueue_chars_as_key_events(@pending_burst)
+        @pending_burst = ""
+        @pending_burst_at = nil
+        @pending_burst_chars = 0
+        return pop_pending_event
+      end
+
+      nil
+    end
+
     private def input_loop : Nil
       while @running
         # Block until byte available (event-driven!)
@@ -96,6 +140,14 @@ module Tui
     private def parse_buffer : Event?
       return nil if @buffer.empty?
 
+      if event = pop_pending_event
+        return event
+      end
+
+      if @paste_mode
+        return parse_paste_buffer
+      end
+
       # Check for escape sequence
       if @buffer[0] == BYTE_ESC
         if @buffer.size == 1
@@ -111,13 +163,145 @@ module Tui
           return KeyEvent.new(Key::Escape)
         end
 
-        return parse_escape_sequence
+        event = parse_escape_sequence
+        return handle_non_char_event(event) if event
+        return parse_paste_buffer if @paste_mode
+        return nil
       end
 
       # Regular character - need to decode UTF-8 properly
       char = decode_utf8_char
       return nil unless char  # Need more bytes for multi-byte char
-      return KeyEvent.new(char)  # Positional to call char_to_key constructor
+      handle_char(char)
+    end
+
+    private def handle_char(char : Char) : Event?
+      if char == '\r' || char == '\n'
+        return handle_enter_char(char)
+      end
+
+      if char.ord == 3
+        return handle_non_char_event(KeyEvent.new('c', Modifiers::Ctrl))
+      end
+
+      if char.printable?
+        return handle_plain_char(char)
+      end
+
+      handle_non_char_event(KeyEvent.new(char))
+    end
+
+    private def handle_plain_char(char : Char) : Event?
+      now = Time.instant
+
+      if @burst_active
+        append_to_burst(char, now)
+        return nil
+      end
+
+      if @pending_burst.empty?
+        @pending_burst = char.to_s
+        @pending_burst_at = now
+        @pending_burst_chars = 1
+        @burst_window_until = now + BURST_ENTER_SUPPRESS
+        return nil
+      end
+
+      if @pending_burst_at && now - @pending_burst_at.not_nil! <= BURST_CHAR_INTERVAL
+        @pending_burst += char
+        @pending_burst_at = now
+        @pending_burst_chars += 1
+        @burst_window_until = now + BURST_ENTER_SUPPRESS
+        start_burst(now) if @pending_burst_chars >= BURST_MIN_CHARS
+        return nil
+      end
+
+      enqueue_chars_as_key_events(@pending_burst)
+      @pending_burst = char.to_s
+      @pending_burst_at = now
+      @pending_burst_chars = 1
+      @burst_window_until = now + BURST_ENTER_SUPPRESS
+      pop_pending_event
+    end
+
+    private def handle_enter_char(char : Char) : Event?
+      now = Time.instant
+      if should_capture_enter?(now)
+        append_to_pending_or_burst('\n', now)
+        return nil
+      end
+
+      flush_all_buffers
+      enqueue_event(KeyEvent.new(char))
+      pop_pending_event
+    end
+
+    private def should_capture_enter?(now : Time::Instant) : Bool
+      return true if @burst_active
+      if @burst_window_until
+        return now <= @burst_window_until.not_nil!
+      end
+      false
+    end
+
+    private def start_burst(now : Time::Instant) : Nil
+      return if @pending_burst.empty?
+      @burst_active = true
+      @burst_buffer = @pending_burst
+      @pending_burst = ""
+      @pending_burst_at = nil
+      @pending_burst_chars = 0
+      @burst_last_at = now
+      @burst_window_until = now + BURST_ENTER_SUPPRESS
+    end
+
+    private def append_to_burst(char : Char, now : Time::Instant) : Nil
+      @burst_buffer += char
+      @burst_last_at = now
+      @burst_window_until = now + BURST_ENTER_SUPPRESS
+    end
+
+    private def append_to_pending_or_burst(char : Char, now : Time::Instant) : Nil
+      if @burst_active
+        append_to_burst(char, now)
+        return
+      end
+
+      @pending_burst += char
+      @pending_burst_at = now
+      @pending_burst_chars += 1
+      @burst_window_until = now + BURST_ENTER_SUPPRESS
+      start_burst(now) if @pending_burst_chars >= BURST_MIN_CHARS
+    end
+
+    private def handle_non_char_event(event : Event?) : Event?
+      return nil unless event
+
+      flush_all_buffers
+      enqueue_event(event)
+      pop_pending_event
+    end
+
+    private def flush_all_buffers : Nil
+      if @burst_active
+        enqueue_event(PasteEvent.new(@burst_buffer))
+        reset_burst
+      end
+
+      if !@pending_burst.empty?
+        enqueue_chars_as_key_events(@pending_burst)
+        @pending_burst = ""
+        @pending_burst_at = nil
+        @pending_burst_chars = 0
+      end
+
+      @burst_window_until = nil
+    end
+
+    private def reset_burst : Nil
+      @burst_active = false
+      @burst_buffer = ""
+      @burst_last_at = nil
     end
 
     # Decode a complete UTF-8 character from buffer
@@ -291,6 +475,11 @@ module Tui
 
     private def parse_tilde_sequence(params : Array(Int32)) : Event?
       key = case params[0]?
+            when 200
+              start_paste_mode
+              return nil
+            when 201
+              return nil
             when 1  then Key::Home
             when 2  then Key::Insert
             when 3  then Key::Delete
@@ -406,6 +595,79 @@ module Tui
       else
         Modifiers::None
       end
+    end
+
+    private def start_paste_mode : Nil
+      flush_all_buffers
+      @paste_mode = true
+      @paste_buffer.clear
+    end
+
+    private def parse_paste_buffer : Event?
+      return nil if @buffer.empty? && @paste_buffer.empty?
+
+      if end_idx = find_sequence(@buffer, PASTE_END)
+        end_idx.times { @paste_buffer << @buffer.shift }
+        PASTE_END.size.times { @buffer.shift }
+
+        bytes = Slice(UInt8).new(@paste_buffer.size) { |i| @paste_buffer[i] }
+        text = String.new(bytes)
+
+        @paste_buffer.clear
+        @paste_mode = false
+        return handle_non_char_event(PasteEvent.new(text))
+      end
+
+      keep = PASTE_END.size - 1
+      if @buffer.size > keep
+        move_count = @buffer.size - keep
+        move_count.times { @paste_buffer << @buffer.shift }
+      end
+
+      nil
+    end
+
+    private def find_sequence(buffer : Array(UInt8), sequence : Array(UInt8)) : Int32?
+      max_start = buffer.size - sequence.size
+      return nil if max_start < 0
+
+      (0..max_start).each do |i|
+        matched = true
+        sequence.size.times do |j|
+          if buffer[i + j] != sequence[j]
+            matched = false
+            break
+          end
+        end
+        return i if matched
+      end
+
+      nil
+    end
+
+    private def burst_timed_out?(now : Time::Instant) : Bool
+      return false unless @burst_last_at
+      now - @burst_last_at.not_nil! > BURST_CHAR_INTERVAL
+    end
+
+    private def pending_timed_out?(now : Time::Instant) : Bool
+      return false unless @pending_burst_at
+      now - @pending_burst_at.not_nil! > BURST_CHAR_INTERVAL
+    end
+
+    private def enqueue_event(event : Event) : Nil
+      @pending_events << event
+    end
+
+    private def enqueue_chars_as_key_events(text : String) : Nil
+      text.each_char do |char|
+        @pending_events << KeyEvent.new(char)
+      end
+    end
+
+    private def pop_pending_event : Event?
+      return nil if @pending_events.empty?
+      @pending_events.shift
     end
   end
 end

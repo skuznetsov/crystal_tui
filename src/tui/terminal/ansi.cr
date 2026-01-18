@@ -76,6 +76,15 @@ module Tui::ANSI
     end
   end
 
+  # Bracketed paste mode
+  def self.enable_bracketed_paste : String
+    "#{CSI}?2004h"
+  end
+
+  def self.disable_bracketed_paste : String
+    "#{CSI}?2004l"
+  end
+
   # Colors - 8 basic colors
   module Color
     BLACK   = 0
