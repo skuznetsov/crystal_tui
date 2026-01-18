@@ -219,16 +219,17 @@ module Tui
     private def event_loop : Nil
       while @running
         begin
-          # Adaptive timeout: short when dirty (responsive), long when idle (low CPU)
-          poll_timeout = dirty? ? 50.milliseconds : 5.seconds
+          # Render immediately if dirty (don't wait for events)
+          if dirty?
+            layout_children
+            render_all
+          end
 
-          # Wait for input or resize signal
+          # Wait for input or resize signal (no timeout = no CPU overhead when idle)
           select
           when event = @input.events.receive
             handle_event(event)
           when Terminal.resize_channel.receive
-            check_resize
-          when timeout(poll_timeout)
             check_resize
           end
 
@@ -238,11 +239,6 @@ module Tui
 
           if event = @input.flush_paste_burst
             handle_event(event)
-          end
-
-          if dirty?
-            layout_children
-            render_all
           end
         rescue Channel::ClosedError
           break
