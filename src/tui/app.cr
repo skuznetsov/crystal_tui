@@ -225,12 +225,24 @@ module Tui
             render_all
           end
 
-          # Wait for input or resize signal (no timeout = no CPU overhead when idle)
-          select
-          when event = @input.events.receive
-            handle_event(event)
-          when Terminal.resize_channel.receive
-            check_resize
+          # Wait for input or resize signal
+          # Use short timeout only when there's pending burst data to flush
+          if @input.has_pending_burst?
+            select
+            when event = @input.events.receive
+              handle_event(event)
+            when Terminal.resize_channel.receive
+              check_resize
+            when timeout(10.milliseconds)
+              # Just need to call flush_paste_burst below
+            end
+          else
+            select
+            when event = @input.events.receive
+              handle_event(event)
+            when Terminal.resize_channel.receive
+              check_resize
+            end
           end
 
           if Terminal.consume_sigint
@@ -420,6 +432,9 @@ module Tui
 
     def handle_event(event : Event) : Bool
       return false if event.stopped?
+
+      # WakeupEvent is internal - just triggers flush, don't propagate
+      return true if event.is_a?(WakeupEvent)
 
       # Handle app-level keys
       if event.is_a?(KeyEvent)

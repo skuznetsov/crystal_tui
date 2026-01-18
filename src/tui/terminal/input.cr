@@ -16,6 +16,7 @@ module Tui
     @burst_buffer : String
     @burst_last_at : Time::Instant?
     @burst_window_until : Time::Instant?
+    @wakeup_scheduled : Bool = false
 
     # Byte constants for parsing
     BYTE_0 = '0'.ord.to_u8
@@ -92,6 +93,11 @@ module Tui
       when timeout(timeout)
         nil
       end
+    end
+
+    # Check if there's pending burst data that might need flushing
+    def has_pending_burst? : Bool
+      @burst_active || !@pending_burst.empty? || !@pending_events.empty?
     end
 
     # Flush pending paste burst data if due (non-bracketed paste heuristic)
@@ -176,6 +182,11 @@ module Tui
     end
 
     private def handle_char(char : Char) : Event?
+      # Ignore NUL (Ctrl+Space) - used for system keyboard layout switching
+      if char.ord == 0
+        return nil
+      end
+
       if char == '\r' || char == '\n'
         return handle_enter_char(char)
       end
@@ -204,6 +215,7 @@ module Tui
         @pending_burst_at = now
         @pending_burst_chars = 1
         @burst_window_until = now + BURST_ENTER_SUPPRESS
+        schedule_wakeup
         return nil
       end
 
@@ -221,6 +233,7 @@ module Tui
       @pending_burst_at = now
       @pending_burst_chars = 1
       @burst_window_until = now + BURST_ENTER_SUPPRESS
+      schedule_wakeup
       pop_pending_event
     end
 
@@ -253,12 +266,14 @@ module Tui
       @pending_burst_chars = 0
       @burst_last_at = now
       @burst_window_until = now + BURST_ENTER_SUPPRESS
+      schedule_wakeup
     end
 
     private def append_to_burst(char : Char, now : Time::Instant) : Nil
       @burst_buffer += char
       @burst_last_at = now
       @burst_window_until = now + BURST_ENTER_SUPPRESS
+      schedule_wakeup
     end
 
     private def append_to_pending_or_burst(char : Char, now : Time::Instant) : Nil
@@ -668,6 +683,21 @@ module Tui
     private def pop_pending_event : Event?
       return nil if @pending_events.empty?
       @pending_events.shift
+    end
+
+    # Schedule a wakeup event to flush pending chars after timeout
+    private def schedule_wakeup : Nil
+      return if @wakeup_scheduled
+      @wakeup_scheduled = true
+
+      spawn do
+        sleep BURST_CHAR_INTERVAL + 1.milliseconds
+        @wakeup_scheduled = false
+        # If there's still pending data, send wakeup to trigger flush
+        if !@pending_burst.empty? || @burst_active
+          @event_channel.send(WakeupEvent.new) rescue nil
+        end
+      end
     end
   end
 end

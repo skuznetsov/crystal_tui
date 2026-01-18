@@ -176,6 +176,60 @@ module Tui
       when .delete?
         delete_forward
         true
+      when .unknown?
+        # Alt+B - move word left (standard readline)
+        if event.matches?("alt+b")
+          move_word_left
+          return true
+        end
+        # Alt+F - move word right (standard readline)
+        if event.matches?("alt+f")
+          move_word_right
+          return true
+        end
+        # Ctrl+B - move left (emacs)
+        if event.matches?("ctrl+b")
+          move_cursor(-1)
+          return true
+        end
+        # Ctrl+F - move right (emacs)
+        if event.matches?("ctrl+f")
+          move_cursor(1)
+          return true
+        end
+        # Ctrl+U - clear to beginning of line
+        if event.matches?("ctrl+u")
+          clear_to_beginning
+          return true
+        end
+        # Ctrl+K - clear to end of line
+        if event.matches?("ctrl+k")
+          clear_to_end
+          return true
+        end
+        # Alt+Backspace - delete word backward (Ctrl+W reserved for tab close)
+        if event.matches?("alt+backspace")
+          delete_word_backward
+          return true
+        end
+        # Ctrl+A - move to beginning
+        if event.matches?("ctrl+a")
+          @cursor = 0
+          mark_dirty!
+          return true
+        end
+        # Ctrl+E - move to end
+        if event.matches?("ctrl+e")
+          @cursor = @value.size
+          mark_dirty!
+          return true
+        end
+        # Alt+D - delete word forward
+        if event.matches?("alt+d")
+          delete_word_forward
+          return true
+        end
+        false
       when .enter?
         @on_submit.try &.call(@value)
         true
@@ -248,6 +302,57 @@ module Tui
     private def delete_forward : Nil
       return if @cursor >= @value.size
       @value = @value[0, @cursor] + @value[@cursor + 1..]
+      @on_change.try &.call(@value)
+      mark_dirty!
+    end
+
+    # Ctrl+U - clear from cursor to beginning of line
+    private def clear_to_beginning : Nil
+      return if @cursor == 0
+      @value = @value[@cursor..]
+      @cursor = 0
+      @on_change.try &.call(@value)
+      mark_dirty!
+    end
+
+    # Ctrl+K - clear from cursor to end of line
+    private def clear_to_end : Nil
+      return if @cursor >= @value.size
+      @value = @value[0, @cursor]
+      @on_change.try &.call(@value)
+      mark_dirty!
+    end
+
+    # Ctrl+W - delete word backward
+    private def delete_word_backward : Nil
+      return if @cursor == 0
+      start = @cursor
+      # Skip whitespace first
+      while @cursor > 0 && @value[@cursor - 1].whitespace?
+        @cursor -= 1
+      end
+      # Then skip word characters
+      while @cursor > 0 && !@value[@cursor - 1].whitespace?
+        @cursor -= 1
+      end
+      @value = @value[0, @cursor] + @value[start..]
+      @on_change.try &.call(@value)
+      mark_dirty!
+    end
+
+    # Alt+D - delete word forward
+    private def delete_word_forward : Nil
+      return if @cursor >= @value.size
+      end_pos = @cursor
+      # Skip word characters first
+      while end_pos < @value.size && !@value[end_pos].whitespace?
+        end_pos += 1
+      end
+      # Then skip whitespace
+      while end_pos < @value.size && @value[end_pos].whitespace?
+        end_pos += 1
+      end
+      @value = @value[0, @cursor] + @value[end_pos..]
       @on_change.try &.call(@value)
       mark_dirty!
     end

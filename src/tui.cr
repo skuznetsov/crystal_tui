@@ -27,6 +27,7 @@ require "./tui/events/key_event"
 require "./tui/events/paste_event"
 require "./tui/events/mouse_event"
 require "./tui/events/resize_event"
+require "./tui/events/wakeup_event"
 
 # Layout
 require "./tui/layout/rect"
