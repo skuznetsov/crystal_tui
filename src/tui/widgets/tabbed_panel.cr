@@ -82,16 +82,22 @@ module Tui
 
     def add_tab(id : String, label : String, tooltip : String? = nil, &block : -> Widget?) : Nil
       content = block.call
+      new_index = @tabs.size
       @tabs << Tab.new(id, label, tooltip, content)
       if content
+        # Non-active tabs start with zero rect so they won't match in_rect checks
+        content.rect = Rect.zero unless new_index == @active_tab
         add_child(content)
       end
       mark_dirty!
     end
 
     def add_tab(tab : Tab) : Nil
+      new_index = @tabs.size
       @tabs << tab
       if content = tab.content
+        # Non-active tabs start with zero rect so they won't match in_rect checks
+        content.rect = Rect.zero unless new_index == @active_tab
         add_child(content)
       end
       mark_dirty!
@@ -109,6 +115,11 @@ module Tui
       old_tab = @active_tab
       @active_tab = index.clamp(0, @tabs.size - 1)
       if old_tab != @active_tab
+        # Clear old tab content's rect so it won't match in_rect checks
+        # This prevents inactive tabs from receiving mouse events
+        if old_tab >= 0 && old_tab < @tabs.size
+          @tabs[old_tab].content.try(&.rect = Rect.zero)
+        end
         @on_tab_switch.try &.call(@tabs[@active_tab]?.try(&.id) || "")
       end
       mark_dirty!
@@ -162,12 +173,7 @@ module Tui
     def switch_to(id : String) : Bool
       @tabs.each_with_index do |tab, i|
         if tab.id == id
-          old_tab = @active_tab
-          @active_tab = i
-          if old_tab != @active_tab
-            @on_tab_switch.try &.call(id)
-          end
-          mark_dirty!
+          self.active_tab = i  # Use setter to clear old tab's rect
           return true
         end
       end

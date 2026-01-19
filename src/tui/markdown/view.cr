@@ -53,6 +53,9 @@ module Tui
     property? horizontal_scroll_enabled : Bool = true  # Allow horizontal scrolling
     property horizontal_scroll_step : Int32 = 8       # Pixels to scroll per keypress
 
+    # Vertical scroll speed (lines per wheel event)
+    property scroll_speed : Int32 = 3
+
     # Content padding (space from edges)
     property padding_left : Int32 = 1
     property padding_right : Int32 = 1
@@ -1479,15 +1482,20 @@ module Tui
           focus unless focused?
         end
 
-        if event.button.wheel_up?
-          scroll_up(3)
-          event.stop!
-          return true
-        elsif event.button.wheel_down?
-          scroll_down(3)
-          event.stop!
-          return true
-        elsif event.action.press? && event.button.left?
+        # Wheel scrolling - only handle if mouse is over widget
+        if event.in_rect?(@rect)
+          if event.button.wheel_up?
+            scroll_up(@scroll_speed)
+            event.stop!
+            return true
+          elsif event.button.wheel_down?
+            scroll_down(@scroll_speed)
+            event.stop!
+            return true
+          end
+        end
+
+        if event.action.press? && event.button.left?
           # Check for vertical scrollbar click first (classic TUI behavior)
           if on_scrollbar?(event.x, event.y)
             handle_scrollbar_click(event.y)
