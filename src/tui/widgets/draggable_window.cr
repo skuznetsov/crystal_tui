@@ -501,7 +501,7 @@ module Tui
       buffer.set(window_rect.right - 1, window_rect.bottom - 1, '◢', handle_style) if clip.contains?(window_rect.right - 1, window_rect.bottom - 1)
     end
 
-    def handle_event(event : Event) : Bool
+    def on_event(event : Event) : Bool
       return false if event.stopped?
 
       case event

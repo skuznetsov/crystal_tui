@@ -404,6 +404,8 @@ module Tui
           break if line =~ /^\d+\.\s/
           break if line =~ /^(\s*[-*_]){3,}\s*$/
           break if line.starts_with?("|")  # Table
+          break if line.strip.starts_with?("<details")   # Details block
+          break if line.strip.starts_with?("</details")  # End of details
 
           lines << line.strip
           advance

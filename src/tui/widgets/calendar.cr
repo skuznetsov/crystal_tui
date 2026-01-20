@@ -173,7 +173,7 @@ module Tui
       a.year == b.year && a.month == b.month && a.day == b.day
     end
 
-    def handle_event(event : Event) : Bool
+    def on_event(event : Event) : Bool
       return false unless focused?
       return false if event.stopped?
 

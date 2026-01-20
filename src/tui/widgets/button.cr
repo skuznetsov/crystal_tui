@@ -70,7 +70,7 @@ module Tui
       end
     end
 
-    def handle_event(event : Event) : Bool
+    def on_event(event : Event) : Bool
       return false if @disabled
       return false if event.stopped?
 

@@ -479,7 +479,7 @@ module Tui
       end
     end
 
-    def handle_event(event : Event) : Bool
+    def on_event(event : Event) : Bool
       return false if event.stopped?
 
       # Ensure layout is calculated for accurate hit testing
@@ -501,10 +501,6 @@ module Tui
             return true
           end
 
-          # Forward to children
-          @first.try { |w| return w.handle_event(event) if w.visible? && event.in_rect?(w.rect) }
-          @second.try { |w| return w.handle_event(event) if w.visible? && event.in_rect?(w.rect) }
-
         when .drag?
           if @dragging
             update_ratio_from_mouse(event.x, event.y)
@@ -512,8 +508,6 @@ module Tui
             event.stop!
             return true
           end
-          @first.try { |w| return true if w.visible? && w.handle_event(event) }
-          @second.try { |w| return true if w.visible? && w.handle_event(event) }
 
         when .release?
           if @dragging
@@ -524,19 +518,7 @@ module Tui
             event.stop!
             return true
           end
-          @first.try { |w| return true if w.visible? && w.handle_event(event) }
-          @second.try { |w| return true if w.visible? && w.handle_event(event) }
         end
-
-        # Wheel events
-        if event.button.wheel_up? || event.button.wheel_down?
-          @first.try { |w| return w.handle_event(event) if w.visible? && event.in_rect?(w.rect) }
-          @second.try { |w| return w.handle_event(event) if w.visible? && event.in_rect?(w.rect) }
-        end
-
-      when KeyEvent
-        @first.try { |w| return true if w.visible? && w.handle_event(event) }
-        @second.try { |w| return true if w.visible? && w.handle_event(event) }
       end
 
       false

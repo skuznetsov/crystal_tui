@@ -101,7 +101,7 @@ module Tui
       buffer.set(x, y, char, style) if clip.contains?(x, y)
     end
 
-    def handle_event(event : Event) : Bool
+    def on_event(event : Event) : Bool
       case event
       when MouseEvent
         if event.action.press? && event.button.left? && event.in_rect?(@rect)

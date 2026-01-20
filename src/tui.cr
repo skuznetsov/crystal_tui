@@ -95,6 +95,10 @@ require "./tui/widgets/pretty"
 require "./tui/widgets/diff_view"
 require "./tui/widgets/scrollbar"
 require "./tui/widgets/scroll_area"
+require "./tui/widgets/view"
+require "./tui/widgets/code_view"
+require "./tui/widgets/view_registry"
+require "./tui/widgets/tool_result"
 
 # Markdown
 require "./tui/markdown/parser"

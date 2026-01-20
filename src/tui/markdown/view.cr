@@ -49,6 +49,19 @@ module Tui
     @content_height : Int32 = 0
     @content_width : Int32 = 0  # Maximum line width for horizontal scroll
 
+    # Scroll accessors for external control
+    def scroll_y : Int32
+      @scroll_y
+    end
+
+    def scroll_y=(value : Int32)
+      @scroll_y = value.clamp(0, max_scroll)
+    end
+
+    def content_height : Int32
+      @content_height
+    end
+
     # Horizontal scroll settings
     property? horizontal_scroll_enabled : Bool = true  # Allow horizontal scrolling
     property horizontal_scroll_step : Int32 = 8       # Pixels to scroll per keypress

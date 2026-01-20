@@ -918,7 +918,11 @@ module Tui
 
     # Find item (DiffFile or DiffHunk) at given index
     private def item_at_index(index : Int32) : DiffFile | DiffHunk | DiffLine | Nil
-      current = 0
+      # Account for commit header lines
+      header_offset = commit_header_lines
+      return nil if index < header_offset  # Click on commit header, not toggleable
+
+      current = header_offset
       @files.each do |file|
         return file if current == index
         current += 1

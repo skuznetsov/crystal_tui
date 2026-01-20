@@ -101,6 +101,31 @@ module Tui
       @visible_nodes[@selected_index]?
     end
 
+    # Select a specific node by reference
+    def select_node(node : Node(T)) : Bool
+      build_visible_nodes
+      if idx = @visible_nodes.index(node)
+        @selected_index = idx
+        ensure_visible
+        mark_dirty!
+        return true
+      end
+      false
+    end
+
+    # Ensure selected item is visible (scroll if needed)
+    def ensure_visible : Nil
+      return if @rect.empty?
+      h = @rect.height
+      return if h <= 0
+
+      if @selected_index < @scroll_offset
+        @scroll_offset = @selected_index
+      elsif @selected_index >= @scroll_offset + h
+        @scroll_offset = @selected_index - h + 1
+      end
+    end
+
     private def build_visible_nodes : Nil
       @visible_nodes.clear
       return unless root = @root
@@ -232,6 +257,14 @@ module Tui
           build_visible_nodes
           @selected_index = @visible_nodes.size - 1
           mark_dirty!
+          return true
+        when event.matches?("pageup"), event.matches?("ctrl+u")
+          page_size = @rect.height > 0 ? @rect.height : 10
+          move_selection(-page_size)
+          return true
+        when event.matches?("pagedown"), event.matches?("ctrl+d")
+          page_size = @rect.height > 0 ? @rect.height : 10
+          move_selection(page_size)
           return true
         end
 

@@ -454,7 +454,7 @@ module Tui
       end
     end
 
-    def handle_event(event : Event) : Bool
+    def on_event(event : Event) : Bool
       case event
       when MouseEvent
         # Handle wheel scrolling
@@ -471,8 +471,7 @@ module Tui
         end
       end
 
-      # Pass events to content
-      @content.try &.handle_event(event) || false
+      false
     end
   end
 end

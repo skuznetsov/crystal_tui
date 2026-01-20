@@ -292,21 +292,10 @@ module Tui
       mark_dirty!
     end
 
-    # --- Events (DOM-like capture/bubble model) ---
+    # --- Events (KISS model) ---
     #
-    # Events flow through the widget tree in three phases:
-    #   1. CAPTURE - Event travels from root DOWN to target
-    #   2. TARGET  - Event is at the target widget
-    #   3. BUBBLE  - Event travels from target UP to root
-    #
-    # Override these methods to handle events:
-    #   - on_capture(event) - Called during capture phase (before children)
-    #   - on_event(event)   - Called during target and bubble phases
-    #
-    # Use event methods to control propagation:
-    #   - event.stop_propagation! - Stop event from reaching next widget
-    #   - event.stop_immediate!   - Stop all further processing
-    #   - event.prevent_default!  - Prevent default action
+    # Simple event handling: children first, then self
+    # Override on_event to handle events for your widget
     #
 
     # Mouse capture - widget that captures gets all mouse events
@@ -320,77 +309,6 @@ module Tui
     # Release mouse capture
     def release_mouse : Nil
       Widget.mouse_capture = nil if Widget.mouse_capture == self
-    end
-
-    # Main event dispatch entry point - implements capture/bubble model
-    # Call this from App or root widget to dispatch events properly
-    def dispatch_event(event : Event) : Bool
-      # Handle mouse capture specially
-      if event.is_a?(MouseEvent)
-        if captured = Widget.mouse_capture
-          return dispatch_to_target(event, captured)
-        end
-      end
-
-      # Find the target widget for this event
-      target = find_event_target(event)
-      return false unless target
-
-      dispatch_to_target(event, target)
-    end
-
-    # Dispatch event to a specific target with capture/bubble phases
-    protected def dispatch_to_target(event : Event, target : Widget) : Bool
-      # Build path from root to target
-      path = target.build_path_from_root
-
-      event.target = target
-
-      # === CAPTURE PHASE (root → target, excluding target) ===
-      event.phase = Event::Phase::Capture
-      path[0...-1].each do |widget|
-        break if event.immediate_stopped?
-        event.current_target = widget
-        widget.on_capture(event)
-      end
-
-      # === TARGET PHASE ===
-      unless event.immediate_stopped?
-        event.phase = Event::Phase::Target
-        event.current_target = target
-        target.on_event(event)
-      end
-
-      # === BUBBLE PHASE (target → root, excluding target) ===
-      unless event.immediate_stopped?
-        event.phase = Event::Phase::Bubble
-        path[0...-1].reverse_each do |widget|
-          break if event.immediate_stopped?
-          event.current_target = widget
-          widget.on_event(event)
-        end
-      end
-
-      # Return true if event was handled (propagation stopped or default prevented)
-      event.propagation_stopped? || event.default_prevented?
-    end
-
-    # Find the target widget for an event
-    protected def find_event_target(event : Event) : Widget?
-      case event
-      when MouseEvent
-        # For mouse events, find deepest widget at coordinates
-        find_widget_at(event.x, event.y)
-      when KeyEvent
-        # For key events, target is the focused widget (or self if none)
-        Widget.focused_widget || self
-      when PasteEvent
-        # Paste events should go to the focused widget (or self if none)
-        Widget.focused_widget || self
-      else
-        # For other events, target is self (root)
-        self
-      end
     end
 
     # Find the deepest visible widget at given coordinates
@@ -409,81 +327,63 @@ module Tui
       self
     end
 
-    # Build path from root to this widget
-    protected def build_path_from_root : Array(Widget)
-      path = [] of Widget
-      widget : Widget? = self
-      while widget
-        path.unshift(widget)
-        widget = widget.parent
-      end
-      path
+    # Override to intercept events BEFORE they reach children (capture phase)
+    # Return true to stop propagation to children
+    # Use for: global hotkeys, modal dialogs, event filtering
+    def on_capture(event : Event) : Bool
+      false
     end
 
-    # === CAPTURE PHASE HANDLER ===
-    # Override to intercept events BEFORE they reach children
-    # Return value is ignored (use event.stop_propagation! to stop)
-    def on_capture(event : Event) : Nil
-      # Default: do nothing during capture phase
-      # Override to intercept events before they reach target
-      #
-      # Example - global hotkey handler:
-      #   def on_capture(event : Event) : Nil
-      #     if event.is_a?(KeyEvent) && event.modifiers.ctrl? && event.char == 's'
-      #       save_document
-      #       event.stop_propagation!
-      #     end
-      #   end
-    end
-
-    # === TARGET/BUBBLE PHASE HANDLER ===
-    # Override to handle events at target or during bubble phase
+    # Override to handle events for this widget (target/bubble phase)
+    # Called after children have had a chance to handle the event
     def on_event(event : Event) : Bool
       false
     end
 
-    # Legacy handle_event - now calls dispatch_event for backward compatibility
-    # Widgets that override this completely bypass capture/bubble model
+    # KISS event handling with capture support
+    # Flow: on_capture → children → on_event
+    # Override on_capture to intercept before children
+    # Override on_event to handle after children
     def handle_event(event : Event) : Bool
       return false if event.stopped?
 
-      # If event already has a phase set, we're in dispatch mode - use old behavior
-      # This allows widgets that override handle_event to still work
-      if event.phase != Event::Phase::None
-        return legacy_handle_event(event)
+      # === CAPTURE PHASE ===
+      # Parent can intercept before children see it
+      return true if on_capture(event)
+
+      # Key and Paste events go directly to focused widget
+      if event.is_a?(KeyEvent) || event.is_a?(PasteEvent)
+        if focused = Widget.focused_widget
+          return focused.on_event(event)
+        end
+        # No focused widget - let root handle it
+        return on_event(event)
       end
 
-      # New behavior: use capture/bubble dispatch
-      dispatch_event(event)
-    end
-
-    # Legacy event handling for backward compatibility
-    # Widgets that override handle_event will call this
-    protected def legacy_handle_event(event : Event) : Bool
-      return false if event.stopped?
-
-      # If a widget has captured mouse, send mouse events directly to it
+      # Mouse capture takes priority
       if event.is_a?(MouseEvent)
         if captured = Widget.mouse_capture
-          return captured.legacy_handle_event(event) if captured != self
+          if captured != self
+            return captured.handle_event(event)
+          end
         end
       end
 
-      # Try children first (in reverse z-order)
+      # === TARGET PHASE (children) ===
+      # Mouse events: try children first (in reverse z-order for proper layering)
       @children.sort_by(&.z_index).reverse_each do |child|
         next unless child.visible?
 
-        # For mouse events, check if in bounds
+        # Check if mouse is in bounds
         if event.is_a?(MouseEvent)
           next unless event.in_rect?(child.render_rect) || child == Widget.mouse_capture
         end
 
-        if child.handle_event(event)
-          return true
-        end
+        return true if child.handle_event(event)
       end
 
-      # Then handle ourselves
+      # === BUBBLE PHASE ===
+      # Children didn't handle it - try ourselves
       on_event(event)
     end
 

@@ -44,8 +44,17 @@ module Tui
     @stylesheet : CSS::Stylesheet?
     @css_hot_reload : CSS::HotReload?
 
+    # Render throttling - prevents render storms from streaming updates
+    @last_render : Time::Span = Time::Span.zero
+    @render_interval : Time::Span = 16.milliseconds  # ~60 FPS default
+
     # CSS file path (set by subclass or via css_file class method)
     class_property css_path : String?
+
+    # Set render FPS (default 60)
+    def render_fps=(fps : Int32) : Nil
+      @render_interval = (1000 // fps).milliseconds
+    end
 
     def initialize
       super(nil)
@@ -53,6 +62,7 @@ module Tui
       @buffer = Buffer.new(width, height)
       @input = InputParser.new
       @last_size = {width, height}
+      @last_render = Time.monotonic
       Tui.current_app = self
 
       # Load CSS if path is set
@@ -178,6 +188,22 @@ module Tui
       layout_children
     end
 
+    # Wake up the event loop to process dirty flag and rerender
+    # Call this from background fibers after updating state
+    def wakeup : Nil
+      @input.events.send(WakeupEvent.new) rescue nil
+    end
+
+    # Override mark_dirty! to automatically wake up event loop
+    # This means any widget calling mark_dirty! from a background fiber
+    # will automatically trigger a re-render without manual wakeup
+    def mark_dirty! : Nil
+      was_dirty = @dirty
+      super
+      # Only wakeup if we weren't already dirty (avoid redundant wakeups)
+      wakeup unless was_dirty
+    end
+
     private def run_with_input : Nil
       # Mount widgets
       on_mount
@@ -219,22 +245,38 @@ module Tui
     private def event_loop : Nil
       while @running
         begin
-          # Render immediately if dirty (don't wait for events)
-          if dirty?
+          now = Time.monotonic
+          time_since_render = now - @last_render
+
+          # Render if dirty AND enough time has passed (throttle)
+          if dirty? && time_since_render >= @render_interval
             layout_children
             render_all
+            @last_render = Time.monotonic
           end
 
-          # Wait for input or resize signal
-          # Use short timeout only when there's pending burst data to flush
-          if @input.has_pending_burst?
+          # Calculate wait timeout
+          wait_timeout = if dirty?
+                           # Dirty but throttled - wait remaining time until next render
+                           remaining = @render_interval - time_since_render
+                           remaining > Time::Span.zero ? remaining : 1.milliseconds
+                         elsif @input.has_pending_burst?
+                           # Pending paste burst - short timeout
+                           10.milliseconds
+                         else
+                           # Nothing pending - wait indefinitely (nil = no timeout)
+                           nil
+                         end
+
+          # Wait for events with appropriate timeout
+          if wait_timeout
             select
             when event = @input.events.receive
               handle_event(event)
             when Terminal.resize_channel.receive
               check_resize
-            when timeout(10.milliseconds)
-              # Just need to call flush_paste_burst below
+            when timeout(wait_timeout)
+              # Timeout reached - loop will check render conditions
             end
           else
             select
@@ -430,14 +472,13 @@ module Tui
       end
     end
 
-    def handle_event(event : Event) : Bool
-      return false if event.stopped?
-
+    # Capture app-level keys before they reach children
+    def on_capture(event : Event) : Bool
       # WakeupEvent is internal - just triggers flush, don't propagate
       return true if event.is_a?(WakeupEvent)
 
-      # Handle app-level keys
       if event.is_a?(KeyEvent)
+        # Quit shortcuts
         if event.matches?("ctrl+c") || event.matches?("ctrl+q")
           quit
           return true
@@ -453,23 +494,19 @@ module Tui
           focus_prev
           return true
         end
-
-        # Route key events to focused widget first
-        if focused = Widget.focused_widget
-          if focused.handle_event(event)
-            return true
-          end
-        end
-
-        # 'q' for quit only if not handled by focused widget
-        if event.matches?("q")
-          quit
-          return true
-        end
       end
 
-      # Delegate to children (for mouse events, etc.)
-      super
+      false
+    end
+
+    # Handle 'q' for quit only if children didn't handle it
+    def on_event(event : Event) : Bool
+      if event.is_a?(KeyEvent) && event.matches?("q")
+        quit
+        return true
+      end
+
+      false
     end
 
     # Override to be notified of app-level events
