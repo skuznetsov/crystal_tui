@@ -300,6 +300,8 @@ module Tui
 
     # Mouse capture - widget that captures gets all mouse events
     class_property mouse_capture : Widget? = nil
+    # Flag to prevent re-redirect when processing captured widget's children
+    class_property? handling_capture : Bool = false
 
     # Capture all mouse events (for dragging)
     def capture_mouse : Nil
@@ -360,11 +362,17 @@ module Tui
         return on_event(event)
       end
 
-      # Mouse capture takes priority
-      if event.is_a?(MouseEvent)
+      # Mouse capture takes priority - redirect once, then process normally
+      # The handling_capture flag prevents children from re-redirecting
+      if event.is_a?(MouseEvent) && !Widget.handling_capture?
         if captured = Widget.mouse_capture
           if captured != self
-            return captured.handle_event(event)
+            Widget.handling_capture = true
+            begin
+              return captured.handle_event(event)
+            ensure
+              Widget.handling_capture = false
+            end
           end
         end
       end
