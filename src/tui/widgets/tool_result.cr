@@ -117,7 +117,9 @@ module Tui
     def content_view=(view : View) : Nil
       @content_view = view
       view.parent = self  # For mark_dirty! propagation
-      view.auto_scroll = true
+      # Auto-scroll disabled by default - enables showing start of output for historical tools
+      # Live streaming tools can enable with: result.content_view.try(&.auto_scroll = true)
+      view.auto_scroll = false
       view.content_bg = Color.palette(235)  # Dark background
       mark_dirty!
     end
@@ -142,8 +144,9 @@ module Tui
     private def ensure_code_view : Nil
       return if @content_view
       view = CodeView.new("#{@id}-content")
-      view.show_line_numbers = true
-      view.show_border = true
+      # Line numbers disabled by default - many tools (Read, Grep) provide their own
+      view.show_line_numbers = false
+      view.show_border = false
       self.content_view = view
     end
 
