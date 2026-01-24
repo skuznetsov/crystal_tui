@@ -19,6 +19,7 @@ module Tui
     # Scroll state
     @scroll_offset : Int32 = 0
     property auto_scroll : Bool = false
+    @pending_scroll_to_bottom : Bool = false  # Deferred scroll when rect not yet set
 
     # Scrollbar styling
     property show_scrollbar : Bool = true
@@ -111,7 +112,12 @@ module Tui
     end
 
     def scroll_to_bottom : Nil
-      @scroll_offset = max_scroll_offset
+      # If rect is not valid yet, defer the scroll until render
+      if @rect.height <= 0
+        @pending_scroll_to_bottom = true
+      else
+        @scroll_offset = max_scroll_offset
+      end
       @auto_scroll = true
       mark_dirty!
     end
@@ -143,6 +149,12 @@ module Tui
     def render(buffer : Buffer, clip : Rect) : Nil
       return unless visible?
       return if @rect.empty?
+
+      # Process deferred scroll_to_bottom now that rect is valid
+      if @pending_scroll_to_bottom
+        @pending_scroll_to_bottom = false
+        @scroll_offset = max_scroll_offset
+      end
 
       content_width = @rect.width
       content_width -= @scrollbar_width if @show_scrollbar && needs_scrollbar?
