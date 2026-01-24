@@ -679,6 +679,55 @@ module Tui
 
       prefix_display_width = display_width  # Remember prefix width for wrapped lines
 
+      # Word buffer for word-boundary wrapping
+      word_buffer = [] of Tuple(String, Style)
+      word_width = 0
+
+      # Helper to start a new line
+      start_new_line = ->{
+        @rendered_lines << line
+        line = [] of Tuple(String, Style)
+        display_width = 0
+        # Continue with same indent for wrapped lines
+        prefix_display_width.times do
+          line << {" ", base_style}
+          display_width += 1
+        end
+      }
+
+      # Helper to flush word buffer to line
+      flush_word = ->{
+        return if word_buffer.empty?
+
+        # If word doesn't fit on current line (and line has content beyond prefix), wrap first
+        if display_width + word_width > width && display_width > prefix_display_width
+          start_new_line.call
+        end
+
+        # If word is longer than available width, break it character by character
+        available = width - display_width
+        if word_width > available && available < width - prefix_display_width
+          # Word is too long even for a fresh line - break it
+          word_buffer.each do |(g, s)|
+            gw = Unicode.grapheme_width(g)
+            if display_width + gw > width
+              start_new_line.call
+            end
+            line << {g, s}
+            display_width += gw
+          end
+        else
+          # Word fits (possibly after wrapping)
+          word_buffer.each do |(g, s)|
+            line << {g, s}
+          end
+          display_width += word_width
+        end
+
+        word_buffer.clear
+        word_width = 0
+      }
+
       elements.each do |elem|
         style = case elem.type
                 when .text?          then base_style
@@ -695,23 +744,30 @@ module Tui
           grapheme = g.to_s
           char_w = Unicode.grapheme_width(grapheme)
 
-          if grapheme == "\n" || display_width + char_w > width
-            @rendered_lines << line
-            line = [] of Tuple(String, Style)
-            display_width = 0
-            # Continue with same indent for wrapped lines
-            prefix_display_width.times do
-              line << {" ", base_style}
-              display_width += 1
+          if grapheme == "\n"
+            # Newline: flush word, then start new line
+            flush_word.call
+            start_new_line.call
+          elsif grapheme == " " || grapheme == "\t"
+            # Space: flush word, then add space if it fits
+            flush_word.call
+            if display_width + char_w <= width
+              line << {grapheme, style}
+              display_width += char_w
+            elsif display_width > prefix_display_width
+              # Space at end of line - start new line instead
+              start_new_line.call
             end
-          end
-
-          unless grapheme == "\n"
-            line << {grapheme, style}
-            display_width += char_w
+          else
+            # Non-space: accumulate into word buffer
+            word_buffer << {grapheme, style}
+            word_width += char_w
           end
         end
       end
+
+      # Flush remaining word
+      flush_word.call
 
       @rendered_lines << line unless line.empty?
     end
