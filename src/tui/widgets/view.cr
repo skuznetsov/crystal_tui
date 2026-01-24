@@ -106,8 +106,8 @@ module Tui
     end
 
     def scroll_to_top : Nil
-      @scroll_offset = 0
-      @auto_scroll = false
+      self.scroll_offset = 0
+      @auto_scroll = false  # Override setter's auto_scroll (we explicitly want it off)
       mark_dirty!
     end
 
@@ -116,9 +116,9 @@ module Tui
       if @rect.height <= 0
         @pending_scroll_to_bottom = true
       else
-        @scroll_offset = max_scroll_offset
+        self.scroll_offset = max_scroll_offset  # Use setter for proper clamping
       end
-      @auto_scroll = true
+      @auto_scroll = true  # Explicit: we always want auto_scroll on for scroll_to_bottom
       mark_dirty!
     end
 
@@ -133,11 +133,11 @@ module Tui
     # Ensure a specific line is visible
     def ensure_visible(line_index : Int32) : Nil
       if line_index < @scroll_offset
-        @scroll_offset = line_index
-        @auto_scroll = false
+        self.scroll_offset = line_index  # Use setter for clamping
+        @auto_scroll = false  # Scrolling up = disable auto_scroll
       elsif line_index >= @scroll_offset + visible_lines
-        @scroll_offset = line_index - visible_lines + 1
-        @auto_scroll = @scroll_offset >= max_scroll_offset
+        self.scroll_offset = line_index - visible_lines + 1  # Use setter for clamping
+        # auto_scroll already set correctly by setter (true if at max)
       end
       mark_dirty!
     end
@@ -153,7 +153,7 @@ module Tui
       # Process deferred scroll_to_bottom now that rect is valid
       if @pending_scroll_to_bottom
         @pending_scroll_to_bottom = false
-        @scroll_offset = max_scroll_offset
+        self.scroll_offset = max_scroll_offset  # Use setter to ensure auto_scroll sync
       end
 
       content_width = @rect.width
