@@ -152,8 +152,8 @@ module Tui
           return Block.new(type, parse_inline(content))
         end
 
-        # Code block: ```language
-        if line.starts_with?("```")
+        # Code block: ```language (allow up to 3 leading spaces per CommonMark)
+        if line =~ /^(\s{0,3})```/
           return parse_code_block
         end
 
@@ -194,12 +194,18 @@ module Tui
 
       private def parse_code_block : Block
         first_line = current_line.not_nil!
-        language = first_line[3..].strip
-        language = nil if language.empty?
+        # Extract language after ``` (handling up to 3 leading spaces)
+        if m = first_line.match(/^\s{0,3}```(.*)$/)
+          language = m[1].strip
+          language = nil if language.empty?
+        else
+          language = nil
+        end
         advance
 
         code_lines = [] of String
-        while (line = current_line) && !line.starts_with?("```")
+        # Closing fence: up to 3 spaces + ```
+        while (line = current_line) && !(line =~ /^\s{0,3}```/)
           code_lines << line
           advance
         end
@@ -398,7 +404,7 @@ module Tui
           # Stop at empty line or special syntax
           break if line.strip.empty?
           break if line =~ /^\#{1,4}\s/
-          break if line.starts_with?("```")
+          break if line =~ /^\s{0,3}```/  # Code fence (up to 3 leading spaces)
           break if line.starts_with?(">")
           break if line =~ /^[-*+]\s/
           break if line =~ /^\d+\.\s/
