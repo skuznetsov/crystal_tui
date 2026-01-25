@@ -180,6 +180,18 @@ module Tui
       false
     end
 
+    # Rename a tab's label by id
+    def rename_tab(id : String, new_label : String) : Bool
+      @tabs.each_with_index do |tab, i|
+        if tab.id == id
+          @tabs[i] = Tab.new(tab.id, new_label, tab.tooltip, tab.content, tab.closable)
+          mark_dirty!
+          return true
+        end
+      end
+      false
+    end
+
     # Override find_widget_at to only consider active tab's content
     # This prevents inactive tabs' stale rects from interfering with hit testing
     def find_widget_at(x : Int32, y : Int32) : Widget?
