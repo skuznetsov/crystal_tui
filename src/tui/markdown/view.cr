@@ -311,6 +311,13 @@ module Tui
       mark_dirty!
     end
 
+    # Reflow content for new width without marking dirty
+    # Use this during render when width changes to avoid infinite loop
+    def reflow : Nil
+      @document = Markdown.parse(@raw_markdown)
+      render_to_lines
+    end
+
     # Check if scrolled to bottom (or within 2 lines of bottom)
     def at_bottom? : Bool
       @scroll_y >= max_scroll - 2
