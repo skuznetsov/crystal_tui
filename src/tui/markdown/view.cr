@@ -318,6 +318,14 @@ module Tui
       render_to_lines
     end
 
+    # Set content without marking dirty (for use during render/cache population)
+    # This prevents infinite render loops when creating cached views
+    def set_content_silent(markdown : String) : Nil
+      @raw_markdown = markdown
+      @document = Markdown.parse(markdown)
+      render_to_lines
+    end
+
     # Check if scrolled to bottom (or within 2 lines of bottom)
     def at_bottom? : Bool
       @scroll_y >= max_scroll - 2

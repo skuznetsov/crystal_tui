@@ -162,6 +162,12 @@ module Tui
           return parse_details
         end
 
+        # End of details block (orphaned closing tag) - skip it
+        if line.strip.starts_with?("</details")
+          advance
+          return nil
+        end
+
         # Blockquote: >
         if line.starts_with?(">")
           return parse_blockquote
