@@ -464,6 +464,14 @@ module Tui
             next
           end
 
+          # Skip triple backticks (code fence) - should be handled at block level
+          # If we see ``` here, just pass through as literal text
+          if remaining.starts_with?("```")
+            current_text += text[pos]
+            pos += 1
+            next
+          end
+
           # Inline code: `text`
           if m = remaining.match(/^`([^`]+)`/)
             flush_text(elements, current_text)
