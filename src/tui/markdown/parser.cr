@@ -464,18 +464,7 @@ module Tui
             next
           end
 
-          # Inline code: ``text`` (double backticks) - check first
-          if m = remaining.match(/^``([^`]|`[^`])+``/)
-            flush_text(elements, current_text)
-            current_text = ""
-            # Extract content between double backticks, trim leading/trailing space
-            code_content = m[0][2..-3].strip
-            elements << InlineElement.new(InlineType::Code, code_content)
-            pos += m[0].size
-            next
-          end
-
-          # Inline code: `text` (single backticks)
+          # Inline code: `text`
           if m = remaining.match(/^`([^`]+)`/)
             flush_text(elements, current_text)
             current_text = ""
