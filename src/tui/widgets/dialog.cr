@@ -648,6 +648,12 @@ module Tui
 
     # Show dialog and focus input if present
     def show : Nil
+      # Fail fast if dialog has no size - it would be invisible but block input
+      if @rect.empty? || @rect.width == 0 || @rect.height == 0
+        raise "Dialog#show called with zero rect! Set dialog.rect before calling show. " \
+              "Dialog: #{self.class.name}, id: #{@id.inspect}, rect: #{@rect.inspect}"
+      end
+
       if input = @input
         input.focused = true
       end
