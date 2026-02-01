@@ -55,6 +55,7 @@ module Tui
     property border_color : Color = Color.white
     property title_color : Color = Color.yellow
     property title_align : Label::Align = Label::Align::Left
+    property title_offset : Int32? = nil  # Custom offset (overrides title_align when set)
     property title_decor : TitleStyle = TitleStyle::Brackets  # Default to brackets
     property title_truncate : TitleTruncate = TitleTruncate::End
 
@@ -210,11 +211,16 @@ module Tui
           full_title = "#{decor_left}#{display_title}#{decor_right}"
 
           full_title_width = Unicode.display_width(full_title)
-          title_start = case @title_align
-                        when .left?   then left_corner
-                        when .center? then (@rect.width - full_title_width) // 2
-                        when .right?  then @rect.width - full_title_width - right_corner
-                        else               left_corner
+          title_start = if offset = @title_offset
+                          # Custom offset (relative to left edge, after corner)
+                          left_corner + offset
+                        else
+                          case @title_align
+                          when .left?   then left_corner
+                          when .center? then (@rect.width - full_title_width) // 2
+                          when .right?  then @rect.width - full_title_width - right_corner
+                          else               left_corner
+                          end
                         end
           title_end = title_start + full_title_width
 
@@ -407,6 +413,8 @@ module Tui
                          when "right"  then Label::Align::Right
                          else               Label::Align::Left
                          end
+        when "title-offset"
+          @title_offset = value.to_s.to_i?
         end
       end
     end
