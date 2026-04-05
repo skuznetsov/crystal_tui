@@ -387,12 +387,21 @@ module Tui
             buffer.set(px, y, '─', splitter_style) if clip.contains?(px, y)
           end
         else
-          # Draw: ─┤ Title ├───
-          display_title = @second_title
-          decorated = "┤ #{display_title} ├"
-          title_start = @second_title_offset  # Use offset property
-          title_end = title_start + decorated.size
           line_width = x_end - x_start
+          # Truncate title to fit within splitter line (reserve 4 chars for ┤/├ + padding)
+          max_title = line_width - @second_title_offset - 4
+          display_title = if max_title > 3 && @second_title.size > max_title
+                            @second_title[0, max_title - 1] + "…"
+                          elsif max_title > 0
+                            @second_title
+                          else
+                            ""
+                          end
+
+          # Draw: ─┤ Title ├───
+          decorated = "┤ #{display_title} ├"
+          title_start = @second_title_offset
+          title_end = Math.min(title_start + decorated.size, line_width)
 
           line_width.times do |i|
             px = x_start + i
