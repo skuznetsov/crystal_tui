@@ -28,7 +28,7 @@ module Tui
       @value : String = "",
       @placeholder : String = "",
       id : String? = nil,
-      @password : Bool = false
+      @password : Bool = false,
     )
       super(id)
       @focusable = true
@@ -229,6 +229,13 @@ module Tui
           delete_word_forward
           return true
         end
+        # Printable character (including Unicode)
+        if char = event.char
+          if printable_input_char?(char)
+            insert_char(char)
+            return true
+          end
+        end
         false
       when .enter?
         @on_submit.try &.call(@value)
@@ -236,13 +243,17 @@ module Tui
       else
         # Check for printable character
         if char = event.char
-          if char >= ' ' && char <= '~'
+          if printable_input_char?(char)
             insert_char(char)
             return true
           end
         end
         false
       end
+    end
+
+    private def printable_input_char?(char : Char) : Bool
+      char.printable?
     end
 
     private def move_cursor(delta : Int32) : Nil
