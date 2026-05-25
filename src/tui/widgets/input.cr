@@ -1,4 +1,6 @@
 # Input widget - single-line text input
+require "string/grapheme"
+
 module Tui
   class Input < Widget
     include Reactive
@@ -73,41 +75,35 @@ module Tui
       available_width = @rect.width - 2
       return if available_width <= 0
 
-      # Adjust scroll to keep cursor visible
-      if @cursor < @scroll
-        @scroll = @cursor
-      elsif @cursor > @scroll + available_width
-        @scroll = @cursor - available_width
-      end
+      cursor_col = display_col_for_index(display_text, @cursor)
 
-      visible_start = @scroll
-      visible_end = Math.min(display_text.size, @scroll + available_width)
-      visible_text = display_text[visible_start...visible_end]? || ""
+      # Adjust display-column scroll to keep cursor visible.
+      if cursor_col < @scroll
+        @scroll = cursor_col
+      elsif cursor_col >= @scroll + available_width
+        @scroll = cursor_col - available_width + 1
+      end
 
       # Draw text
       text_y = @rect.y + @rect.height // 2
-      visible_text.each_char_with_index do |char, i|
-        x = @rect.x + 1 + i
+      each_visible_grapheme(display_text, @scroll, available_width) do |grapheme, col|
+        x = @rect.x + 1 + col - @scroll
         next unless clip.contains?(x, text_y)
-        buffer.set(x, text_y, char, text_style)
+        buffer.set(x, text_y, grapheme, text_style)
       end
 
       # Draw cursor if focused
       if focused?
-        cursor_x = @rect.x + 1 + (@cursor - @scroll)
+        cursor_x = @rect.x + 1 + (cursor_col - @scroll)
         if clip.contains?(cursor_x, text_y) && cursor_x < @rect.x + @rect.width - 1
           # Invert colors at cursor position
-          cursor_char = if @cursor < @value.size
-                          @password ? '*' : @value[@cursor]
-                        else
-                          ' '
-                        end
+          cursor_text = cursor_grapheme(display_text, @cursor)
           cursor_style = Style.new(
             fg: current_style.bg.default? ? Color.black : current_style.bg,
             bg: current_style.fg,
             attrs: current_style.attrs
           )
-          buffer.set(cursor_x, text_y, cursor_char, cursor_style)
+          buffer.set(cursor_x, text_y, cursor_text, cursor_style)
         end
       end
     end
@@ -131,8 +127,8 @@ module Tui
         if event.action.press? && event.button.left?
           if @rect.contains?(event.x, event.y)
             # Click to position cursor
-            click_x = event.x - @rect.x - 1 + @scroll
-            @cursor = click_x.clamp(0, @value.size)
+            click_col = event.x - @rect.x - 1 + @scroll
+            @cursor = index_for_display_col(@value, click_col)
             mark_dirty!
             event.stop!
             return true
@@ -248,6 +244,64 @@ module Tui
     private def move_cursor(delta : Int32) : Nil
       @cursor = (@cursor + delta).clamp(0, @value.size)
       mark_dirty!
+    end
+
+    private def each_visible_grapheme(text : String, scroll_col : Int32, width : Int32, & : String, Int32 ->)
+      col = 0
+      text.each_grapheme do |raw_grapheme|
+        grapheme = raw_grapheme.to_s
+        grapheme_width = Unicode.grapheme_width(grapheme)
+        next if grapheme_width == 0
+
+        next_col = col + grapheme_width
+        break if col >= scroll_col + width
+        if col >= scroll_col && next_col <= scroll_col + width
+          yield grapheme, col
+        end
+        col = next_col
+      end
+    end
+
+    private def display_col_for_index(text : String, char_index : Int32) : Int32
+      col = 0
+      index = 0
+      text.each_grapheme do |raw_grapheme|
+        grapheme = raw_grapheme.to_s
+        break if index >= char_index
+
+        col += Unicode.grapheme_width(grapheme)
+        index += grapheme.size
+      end
+      col
+    end
+
+    private def index_for_display_col(text : String, target_col : Int32) : Int32
+      return 0 if target_col <= 0
+
+      col = 0
+      index = 0
+      text.each_grapheme do |raw_grapheme|
+        grapheme = raw_grapheme.to_s
+        width = Unicode.grapheme_width(grapheme)
+        next_col = col + width
+        return index if target_col < next_col
+
+        col = next_col
+        index += grapheme.size
+      end
+      text.size
+    end
+
+    private def cursor_grapheme(text : String, char_index : Int32) : String
+      return " " if char_index >= text.size
+
+      index = 0
+      text.each_grapheme do |raw_grapheme|
+        grapheme = raw_grapheme.to_s
+        return grapheme if index == char_index
+        index += grapheme.size
+      end
+      " "
     end
 
     private def move_word_left : Nil

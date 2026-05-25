@@ -10,10 +10,10 @@ end
 module Tui
   module Unicode
     # Ambiguous-width symbols (emoji/dingbats) can be 1 or 2 columns depending on terminal.
-    # Enable wide rendering by setting TUI_AMBIGUOUS_WIDE=1 (or true/yes).
+    # Default to wide for modern emoji-capable terminals; opt out with TUI_AMBIGUOUS_WIDE=0.
     @@ambiguous_wide : Bool = begin
       value = ENV["TUI_AMBIGUOUS_WIDE"]?.to_s.downcase
-      value == "1" || value == "true" || value == "yes"
+      !(value == "0" || value == "false" || value == "no")
     end
 
     def self.ambiguous_wide? : Bool
