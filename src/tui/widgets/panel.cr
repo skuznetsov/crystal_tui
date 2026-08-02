@@ -78,6 +78,18 @@ module Tui
     # Content widget (single child)
     @content : Widget?
 
+    # Initialize and configure content through a block.
+    def initialize(
+      @title : String = "",
+      id : String? = nil,
+      @border_style : BorderStyle = BorderStyle::Light,
+      @border_color : Color = Color.white,
+      &block : Panel -> Nil
+    )
+      super(id)
+      block.call(self)
+    end
+
     def initialize(
       @title : String = "",
       id : String? = nil,

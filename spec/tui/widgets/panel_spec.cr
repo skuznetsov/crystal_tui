@@ -18,6 +18,16 @@ describe Tui::Panel do
       panel = Tui::Panel.new(border_style: Tui::Panel::BorderStyle::Double)
       panel.border_style.should eq Tui::Panel::BorderStyle::Double
     end
+
+    it "configures content through an initializer block" do
+      content = Tui::Label.new("Hello")
+      panel = Tui::Panel.new("Hello", id: "main") do |configured|
+        configured.content = content
+      end
+
+      panel.id.should eq "main"
+      panel.content.should eq content
+    end
   end
 
   describe "#content=" do
