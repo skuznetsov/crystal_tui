@@ -163,6 +163,12 @@ module Tui
     # Override to create root widget tree
     abstract def compose : Array(Widget)
 
+    # Build the widget tree before applying a stylesheet loaded in initialize.
+    def on_mount : Nil
+      super
+      apply_styles_to_all
+    end
+
     # Start the application
     def run : Nil
       Terminal.init

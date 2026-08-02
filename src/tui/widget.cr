@@ -69,6 +69,7 @@ module Tui
     property? visible : Bool = true
     property? mounted : Bool = false
     property? focusable : Bool = false  # Can receive focus
+    @composition_initialized : Bool = false
     @focused : Bool = false
     @hovered : Bool = false
 
@@ -245,9 +246,15 @@ module Tui
 
     # Called when widget is added to tree
     def on_mount : Nil
+      return if @mounted
+
       @mounted = true
-      composed = compose
-      composed.each { |child| add_child(child) }
+      @children.each { |child| child.on_mount unless child.mounted? }
+      unless @composition_initialized
+        composed = compose
+        composed.each { |child| add_child(child) unless @children.includes?(child) }
+        @composition_initialized = true
+      end
     end
 
     # Called when widget is removed from tree
@@ -450,7 +457,7 @@ module Tui
       results
     end
 
-    private def query_recursive(selector : String, results : Array(Widget)) : Nil
+    protected def query_recursive(selector : String, results : Array(Widget)) : Nil
       if matches_selector?(selector)
         results << self
       end
