@@ -15,23 +15,23 @@ class CSSHotReloadDemo < Tui::App
   def initialize
     super
 
-    @panel = Tui::Panel.new("main-panel")
-    @panel.title = "CSS Hot Reload Demo"
+    @panel = Tui::Panel.new("CSS Hot Reload Demo", id: "main-panel")
 
-    @button1 = Tui::Button.new("Primary Button", "button1")
-    @button1.add_class("primary")
+    @button1 = Tui::Button.new("Primary Button", id: "button1")
 
-    @button2 = Tui::Button.new("Secondary Button", "button2")
-    @button2.add_class("secondary")
+    @button2 = Tui::Button.new("Secondary Button", id: "button2")
 
-    @label = Tui::Label.new("info-label")
+    @label = Tui::Label.new(id: "info-label")
     @label.text = "Edit examples/demo.tcss and save to see changes!"
     @label.add_class("info")
 
-    @status = Tui::Label.new("status")
+    @status = Tui::Label.new(id: "status")
     @status.text = "Watching: #{CSS_PATH}"
+  end
 
-    # Load CSS and enable hot reload
+  # Apply CSS after compose has mounted the widgets, then watch for edits.
+  def on_mount : Nil
+    super
     load_css(CSS_PATH) if File.exists?(CSS_PATH)
     setup_hot_reload
   end
@@ -56,7 +56,7 @@ class CSSHotReloadDemo < Tui::App
   end
 
   def compose : Array(Tui::Widget)
-    [@panel] of Tui::Widget
+    [@panel, @button1, @button2, @label, @status] of Tui::Widget
   end
 
   private def layout_children : Nil
@@ -77,16 +77,6 @@ class CSSHotReloadDemo < Tui::App
     # Status at bottom
     @status.rect = Tui::Rect.new(2, @rect.height - 2, @rect.width - 4, 1)
   end
-
-  def render(buffer : Tui::Buffer, clip : Tui::Rect) : Nil
-    layout_children
-
-    @panel.render(buffer, clip)
-    @button1.render(buffer, clip)
-    @button2.render(buffer, clip)
-    @label.render(buffer, clip)
-    @status.render(buffer, clip)
-  end
 end
 
 # Create the demo CSS file if it doesn't exist
@@ -95,35 +85,25 @@ unless File.exists?(CSSHotReloadDemo::CSS_PATH)
   /* Demo TCSS - Edit this file to see hot reload! */
 
   $primary: cyan;
-  $secondary: #888;
 
   /* Main panel styling */
   #main-panel {
     border: light white;
-    background: rgb(30, 30, 40);
-  }
-
-  /* Primary button */
-  .primary {
-    background: $primary;
-    color: black;
-  }
-
-  /* Secondary button */
-  .secondary {
-    background: $secondary;
-    color: white;
+    border-title-color: $primary;
+    title-align: center;
   }
 
   /* Info label */
   .info {
     color: yellow;
+    text-align: center;
   }
 
-  /* Focused state */
-  Button:focus {
-    background: white;
+  /* Status label */
+  #status {
     color: black;
+    background: $primary;
+    text-align: center;
   }
   TCSS
 end

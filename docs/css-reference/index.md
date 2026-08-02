@@ -6,7 +6,7 @@ Crystal TUI uses TCSS (TUI CSS), a simplified CSS dialect for terminal styling.
 
 ### Type Selector
 ```css
-Button {
+Label {
   background: blue;
 }
 ```
@@ -20,7 +20,7 @@ Button {
 
 ### Class Selector
 ```css
-.primary {
+.primary { /* apply this class to a Label for visual color */
   background: cyan;
 }
 ```
@@ -34,7 +34,7 @@ Button {
 
 ### Compound Selector
 ```css
-Button.primary {
+Label.primary {
   background: green;
 }
 ```
@@ -57,19 +57,12 @@ Panel > Label {
 
 ### State
 ```css
-Button:focus {
-  background: white;
-  color: black;
-}
-
-Button:hover {
-  background: cyan;
-}
-
-Input:disabled {
-  color: gray;
+Panel:focus {
+  border: round yellow;
 }
 ```
+
+State selectors are matched when a stylesheet is applied. The current runtime does not automatically assign hover state or recompute styles after state changes; `:disabled` is not consumed by the current widgets.
 
 ### Position
 ```css
@@ -77,12 +70,9 @@ Input:disabled {
 Button:first-child { margin-top: 0; }
 Button:last-child { margin-bottom: 0; }
 Button:only-child { margin: 0; }
-
-/* Nth child */
-Item:nth-child(2) { background: blue; }
-Item:even { background: #333; }
-Item:odd { background: #444; }
 ```
+
+`:nth-child`, `:even`, and `:odd` are not currently reliable CSS selectors; use explicit classes or IDs for those cases.
 
 ### Content
 ```css
@@ -95,12 +85,12 @@ Panel:empty {
 ```css
 /* Dark theme (default) */
 Panel:dark {
-  background: #1a1a1a;
+  border: round white;
 }
 
 /* Light theme */
 Panel:light {
-  background: #f0f0f0;
+  border: round black;
 }
 ```
 
@@ -110,14 +100,19 @@ Panel:light {
 /* Define variables */
 $primary: cyan;
 $bg-dark: rgb(30, 30, 40);
-$border-color: #666;
 
 /* Use variables */
-Button {
+Label {
   background: $primary;
-  border: light $border-color;
+  color: white;
+}
+
+Panel {
+  border: light #666;
 }
 ```
+
+Variable references are resolved when they occupy the whole value; keep composite declarations such as border style and color literal (or use separate imperative assignments) until composite variable expansion is supported.
 
 ## Properties
 
@@ -162,16 +157,21 @@ Panel {
 |----------|--------|-------------|
 | `background` | color | Background color |
 | `color` | color | Text color |
-| `opacity` | `0.0`-`1.0`, `0%`-`100%` | Transparency |
+| `opacity` | `0.0`-`1.0`, `0%`-`100%` | Stored on the widget; rendering support is pending |
 | `visibility` | `visible`, `hidden` | Show/hide |
 | `display` | `block`, `none` | Display mode |
 | `z-index` | integer | Stack order |
 
+`Label` consumes `background`, `color`, and text properties. `Panel` consumes border and title properties. Other widgets keep their constructor styles for those visual properties. The base widget parses and stores `opacity`, but the renderer does not apply it yet.
+
 ```css
-Panel {
+Label {
   background: blue;
   color: white;
-  opacity: 80%;
+}
+
+Panel {
+  border: round cyan;
 }
 ```
 
@@ -202,7 +202,7 @@ Panel {
 | `text-style` | `bold`, `dim`, `italic`, `underline`, `blink`, `reverse`, `strikethrough` | Text attributes |
 | `text-overflow` | `clip`, `ellipsis` | Overflow handling |
 | `text-wrap` | `wrap`, `nowrap` | Text wrapping |
-| `text-opacity` | `0.0`-`1.0` | Text transparency |
+| `text-opacity` | `0.0`-`1.0` | Stored on `Label`; rendering support is pending |
 
 ```css
 Label {
@@ -237,19 +237,15 @@ Footer {
 | `grid-columns` | integer | Number of columns |
 | `grid-rows` | integer | Number of rows |
 | `grid-gutter` | integer | Gap between cells |
-| `column-span` | integer | Columns to span |
-| `row-span` | integer | Rows to span |
 
 ```css
 Grid {
   grid-columns: 3;
   grid-gutter: 1;
 }
-
-#wide-widget {
-  column-span: 2;
-}
 ```
+
+Set child spans imperatively with `grid.set_column_span(index, span)` and `grid.set_row_span(index, span)`; the `column-span` and `row-span` declarations are not consumed by the current CSS applier.
 
 ## Colors
 
@@ -283,7 +279,7 @@ color: rgb(255, 128, 0);
 /* Block comment */
 // Line comment
 
-Button {
+Label {
   background: blue; /* inline comment */
 }
 ```

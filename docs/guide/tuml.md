@@ -81,8 +81,7 @@ Panel#main:
               children:
                 - Button#cancel:
                     text: Cancel
-                - Button#save:
-                    classes: [primary]
+                - Button#save.primary:
                     text: Save
 ```
 
@@ -133,7 +132,7 @@ For machine generation:
 ### Parse and Build
 
 ```crystal
-require "tui"
+require "crystal_tui"
 
 # From string
 widget = Tui::TUML::Builder.from_string(<<-TUI, :pug)
@@ -163,7 +162,7 @@ class MyApp < Tui::App
 
     # Wire up events after mounting
     if btn = query_one("#submit", Tui::Button)
-      btn.on_click { submit_form }
+      btn.on_press { submit_form }
     end
   end
 end
@@ -171,10 +170,10 @@ end
 
 ## Supported Widgets
 
-All built-in widgets are supported:
+The TUML builder registry currently supports these widget names:
 
 ### Containers
-- `Panel`, `VBox`, `HBox`, `Grid`
+- `App` (placeholder), `Panel`, `VBox`, `HBox`, `Grid`
 
 ### Input
 - `Button`, `Input`, `Checkbox`, `Switch`, `Slider`
@@ -233,7 +232,7 @@ ProgressBar#id(value="0.75")
 | Aspect | TUML | Code |
 |--------|------|------|
 | Readability | Visual hierarchy | More verbose |
-| Hot reload | Future feature | Not possible |
+| Hot reload | Not implemented | Recompile the application |
 | Type safety | Runtime | Compile time |
 | IDE support | Limited | Full |
 | Best for | Layout, prototyping | Complex logic |

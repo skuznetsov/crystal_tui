@@ -12,7 +12,7 @@ A modern, Textual-inspired TUI framework for Crystal.
 ## Features
 
 - **40+ Widgets** - Buttons, inputs, tables, trees, dialogs, and more
-- **CSS Styling** - Textual-compatible TCSS with hot reload
+- **CSS Styling** - A TCSS subset with variables, selectors, and CSS hot reload
 - **TUML Markup** - Define UIs in Pug, YAML, or JSON
 - **Reactive** - Automatic re-rendering on property changes
 - **Keyboard & Mouse** - Full input support with focus management
@@ -23,7 +23,7 @@ Add to your `shard.yml`:
 
 ```yaml
 dependencies:
-  tui:
+  crystal_tui:
     github: skuznetsov/crystal_tui
 ```
 
@@ -36,7 +36,7 @@ shards install
 ## Hello World
 
 ```crystal
-require "tui"
+require "crystal_tui"
 
 class HelloApp < Tui::App
   def compose : Array(Tui::Widget)
@@ -44,7 +44,7 @@ class HelloApp < Tui::App
       Tui::Panel.new("Hello", id: "main") do |p|
         p.content = Tui::Label.new("Welcome to Crystal TUI!")
       end
-    ]
+    ] of Tui::Widget
   end
 end
 

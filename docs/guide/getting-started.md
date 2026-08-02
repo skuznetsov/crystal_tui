@@ -18,7 +18,7 @@ Add dependency to `shard.yml`:
 
 ```yaml
 dependencies:
-  tui:
+  crystal_tui:
     github: skuznetsov/crystal_tui
 ```
 
@@ -33,18 +33,20 @@ shards install
 Replace `src/my_tui_app.cr` with:
 
 ```crystal
-require "tui"
+require "crystal_tui"
 
 class MyApp < Tui::App
   def compose : Array(Tui::Widget)
     [
       Tui::Panel.new("My First App", id: "main") do |panel|
-        panel.content = Tui::VBox.new do |vbox|
-          vbox.add_child Tui::Label.new("Hello, TUI!", id: "greeting")
-          vbox.add_child Tui::Button.new("Click Me", id: "btn")
+        panel.content = Tui::VBox.new do
+          [
+            Tui::Label.new("Hello, TUI!", id: "greeting"),
+            Tui::Button.new("Click Me", id: "btn"),
+          ] of Tui::Widget
         end
       end
-    ]
+    ] of Tui::Widget
   end
 end
 
@@ -64,30 +66,39 @@ Press `Ctrl+C` to exit.
 Make the button interactive:
 
 ```crystal
-require "tui"
+require "crystal_tui"
 
 class MyApp < Tui::App
   @counter = 0
+  @counter_label : Tui::Label?
+  @counter_button : Tui::Button?
 
   def compose : Array(Tui::Widget)
+    counter_label = Tui::Label.new("Count: 0", id: "counter")
+    counter_button = Tui::Button.new("Increment", id: "btn")
+    @counter_label = counter_label
+    @counter_button = counter_button
+
     [
       Tui::Panel.new("Counter App", id: "main") do |panel|
-        panel.content = Tui::VBox.new do |vbox|
-          vbox.add_child Tui::Label.new("Count: 0", id: "counter")
-          vbox.add_child Tui::Button.new("Increment", id: "btn")
+        panel.content = Tui::VBox.new do
+          [
+            counter_label,
+            counter_button,
+          ] of Tui::Widget
         end
       end
-    ]
+    ] of Tui::Widget
   end
 
   def on_mount : Nil
     super
 
-    # Find the button and add click handler
-    if btn = query_one("#btn", Tui::Button)
-      btn.on_click do
+    # Add the handler to the button created by compose
+    if btn = @counter_button
+      btn.on_press do
         @counter += 1
-        if label = query_one("#counter", Tui::Label)
+        if label = @counter_label
           label.text = "Count: #{@counter}"
         end
       end
@@ -113,22 +124,19 @@ Panel {
   text-style: bold;
 }
 
-Button {
+Label {
   background: blue;
   color: white;
 }
-
-Button:focus {
-  background: cyan;
-  color: black;
-}
 ```
+
+Visual `color` and `background` declarations are consumed by `Label`; buttons keep their constructor styles. `Panel` consumes border and title declarations.
 
 Load it in your app:
 
 ```crystal
 class MyApp < Tui::App
-  @@css_path = "styles.tcss"
+  self.css_path = "styles.tcss"
 
   # ... rest of code
 end
@@ -149,7 +157,7 @@ Now edit `styles.tcss` and see changes instantly!
 - [Widget Gallery](../widgets/index.md) - Explore all widgets
 - [CSS Reference](../css-reference/index.md) - Learn styling
 - [TUML Guide](tuml.md) - Declarative UI definitions
-- [Events Guide](events.md) - Keyboard and mouse handling
+- Event handling examples are covered in the event handling section below.
 
 ## Common Patterns
 
@@ -183,12 +191,12 @@ widget.mark_dirty!
 button.focus
 
 # Tab navigation is automatic
-# Override with:
-def on_key(event : Tui::KeyEvent) : Bool
-  if event.matches?("tab")
+# Override with an on_capture hook when custom behavior is needed:
+def on_capture(event : Tui::Event) : Bool
+  if event.is_a?(Tui::KeyEvent) && event.matches?("tab")
     focus_next
     return true
   end
-  false
+  super
 end
 ```

@@ -6,70 +6,70 @@ Crystal TUI includes 40+ widgets for building terminal interfaces.
 
 | Widget | Description |
 |--------|-------------|
-| [Panel](panel.md) | Container with border and title |
-| [VBox](vbox.md) | Vertical layout |
-| [HBox](hbox.md) | Horizontal layout |
-| [Grid](grid.md) | CSS grid-style layout |
-| [SplitContainer](split-container.md) | Resizable split panes |
-| [TabbedPanel](tabbed-panel.md) | Tabbed content |
-| [Collapsible](collapsible.md) | Expandable section |
-| [Dialog](dialog.md) | Modal dialog |
+| `Panel` | Container with border and title |
+| `VBox` | Vertical layout |
+| `HBox` | Horizontal layout |
+| `Grid` | CSS grid-style layout |
+| `SplitContainer` | Resizable split panes |
+| `TabbedPanel` | Tabbed content |
+| `Collapsible` | Expandable section |
+| `Dialog` | Modal dialog |
 
 ## Input Widgets
 
 | Widget | Description |
 |--------|-------------|
-| [Button](button.md) | Clickable button |
-| [Input](input.md) | Single-line text input |
-| [MaskedInput](masked-input.md) | Formatted input (phone, date) |
-| [TextEditor](text-editor.md) | Multi-line editor |
-| [Checkbox](checkbox.md) | Toggle checkbox |
-| [RadioGroup](radio-group.md) | Radio button group |
-| [ComboBox](combo-box.md) | Dropdown select |
-| [Switch](switch.md) | iOS-style toggle |
-| [Slider](slider.md) | Range slider |
-| [Calendar](calendar.md) | Date picker |
-| [TimePicker](time-picker.md) | Time selection |
-| [ColorPicker](color-picker.md) | Color palette |
+| `Button` | Clickable button |
+| `Input` | Single-line text input |
+| `MaskedInput` | Formatted input (phone, date) |
+| `TextEditor` | Multi-line editor |
+| `Checkbox` | Toggle checkbox |
+| `RadioGroup` | Radio button group |
+| `ComboBox` | Dropdown select |
+| `Switch` | iOS-style toggle |
+| `Slider` | Range slider |
+| `Calendar` | Date picker |
+| `TimePicker` | Time selection |
+| `ColorPicker` | Color palette |
 
 ## Display Widgets
 
 | Widget | Description |
 |--------|-------------|
-| [Label](label.md) | Text display |
-| [Header](header.md) | App title bar with clock |
-| [Footer](footer.md) | Key bindings bar |
-| [ProgressBar](progress-bar.md) | Progress indicator |
-| [LoadingIndicator](loading-indicator.md) | Animated spinner |
-| [Toast](toast.md) | Popup notifications |
-| [Rule](rule.md) | Visual divider |
-| [Sparkline](sparkline.md) | Mini trend chart |
-| [Digits](digits.md) | Large ASCII numbers |
-| [Placeholder](placeholder.md) | Development placeholder |
-| [Pretty](pretty.md) | Pretty-print data |
-| [RichText](rich-text.md) | Styled text spans |
-| [Link](link.md) | Clickable URL |
+| `Label` | Text display |
+| `Header` | App title bar with clock |
+| `Footer` | Key bindings bar |
+| `ProgressBar` | Progress indicator |
+| `LoadingIndicator` | Animated spinner |
+| `Toast` | Popup notifications |
+| `Rule` | Visual divider |
+| `Sparkline` | Mini trend chart |
+| `Digits` | Large ASCII numbers |
+| `Placeholder` | Development placeholder |
+| `Pretty` | Pretty-print data |
+| `RichText` | Styled text spans |
+| `Link` | Clickable URL |
 
 ## Data Widgets
 
 | Widget | Description |
 |--------|-------------|
-| [DataTable](data-table.md) | Data grid with sorting |
-| [Tree](tree.md) | Hierarchical tree view |
-| [ListView](list-view.md) | Virtual scrolling list |
-| [SelectionList](selection-list.md) | Multi-select with checkboxes |
-| [Log](log.md) | Scrolling log viewer |
-| [FilePanel](file-panel.md) | File browser |
-| [TextViewer](text-viewer.md) | Scrollable text |
-| [MarkdownView](markdown-view.md) | Markdown renderer |
+| `DataTable` | Data grid with sorting |
+| `Tree` | Hierarchical tree view |
+| `ListView` | Virtual scrolling list |
+| `SelectionList` | Multi-select with checkboxes |
+| `Log` | Scrolling log viewer |
+| `FilePanel` | File browser |
+| `TextViewer` | Scrollable text |
+| `MarkdownView` | Markdown renderer |
 
 ## Layout Widgets
 
 | Widget | Description |
 |--------|-------------|
-| [IconSidebar](icon-sidebar.md) | VSCode-style sidebar |
-| [WindowManager](window-manager.md) | Draggable windows |
-| [MenuBar](menu-bar.md) | Application menu |
+| `IconSidebar` | VSCode-style sidebar |
+| `WindowManager` | Draggable windows |
+| `MenuBar` | Application menu |
 
 ---
 
@@ -79,7 +79,7 @@ Crystal TUI includes 40+ widgets for building terminal interfaces.
 
 ```crystal
 button = Tui::Button.new("Click Me", id: "btn")
-button.on_click { puts "Clicked!" }
+button.on_press { puts "Clicked!" }
 ```
 
 ```
@@ -106,9 +106,11 @@ input.on_change { |value| puts value }
 
 ```crystal
 panel = Tui::Panel.new("Settings", id: "settings")
-panel.content = Tui::VBox.new do |vbox|
-  vbox.add_child Tui::Checkbox.new("Dark mode", id: "dark")
-  vbox.add_child Tui::Checkbox.new("Notifications", id: "notif")
+panel.content = Tui::VBox.new do
+  [
+    Tui::Checkbox.new("Dark mode", id: "dark"),
+    Tui::Checkbox.new("Notifications", id: "notif"),
+  ] of Tui::Widget
 end
 ```
 
@@ -123,10 +125,10 @@ end
 
 ```crystal
 table = Tui::DataTable.new(id: "users")
-table.add_column("Name", width: 20)
-table.add_column("Email", width: 30)
-table.add_row(["Alice", "alice@example.com"])
-table.add_row(["Bob", "bob@example.com"])
+table.add_column("name", "Name", width: 20)
+table.add_column("email", "Email", width: 30)
+table.add_row(name: "Alice", email: "alice@example.com")
+table.add_row(name: "Bob", email: "bob@example.com")
 ```
 
 ```

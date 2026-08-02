@@ -5,9 +5,9 @@ A modern, Textual-inspired TUI (Terminal User Interface) framework for Crystal.
 ## Features
 
 - **Rich Widget Library**: 40+ widgets including Panel, Button, Input, DataTable, Tree, ListView, Log, and more
-- **CSS Styling**: Textual-compatible CSS (TCSS) for styling with variables, selectors, and hot reload
+- **CSS Styling**: A TCSS subset with variables, selectors, and CSS hot reload
 - **Flexible Layout**: Flexbox-like layout engine with fr units, percentages, and constraints
-- **DOM-like Event Model**: Capture/bubble phases familiar to web developers
+- **DOM-like Event Routing**: Capture and bubble hooks around child dispatch
 - **Reactive Properties**: Automatic re-rendering on property changes
 - **Overlay System**: Popups, dialogs, and menus that render above other widgets
 
@@ -17,7 +17,7 @@ Add to your `shard.yml`:
 
 ```yaml
 dependencies:
-  tui:
+  crystal_tui:
     github: skuznetsov/crystal_tui
 ```
 
@@ -30,15 +30,15 @@ shards install
 ## Quick Start
 
 ```crystal
-require "tui"
+require "crystal_tui"
 
 class HelloWorld < Tui::App
   def compose : Array(Tui::Widget)
     [
       Tui::Panel.new("Hello, World!", id: "main") do |panel|
-        panel.content = Tui::Label.new("welcome", text: "Welcome to Crystal TUI!")
+        panel.content = Tui::Label.new("Welcome to Crystal TUI!", id: "welcome")
       end
-    ]
+    ] of Tui::Widget
   end
 end
 
@@ -107,8 +107,8 @@ Crystal TUI uses TCSS (TUI CSS), a simplified CSS dialect:
 $primary: cyan;
 $bg: rgb(30, 30, 40);
 
-/* Type selector */
-Button {
+/* Type selector (Label consumes visual color properties) */
+Label {
   background: blue;
   color: white;
 }
@@ -119,15 +119,14 @@ Button {
   padding: 1;
 }
 
-/* Class selector */
+/* Class selector (apply this class to a Label) */
 .active {
   background: $primary;
 }
 
-/* Pseudo-class */
-Button:focus {
-  background: white;
-  color: black;
+/* Pseudo-class (Panel consumes border properties) */
+Panel:focus {
+  border: round yellow;
 }
 
 /* Descendant selector */
@@ -150,9 +149,11 @@ Panel > Label {
 - `padding`, `padding-top/right/bottom/left`
 
 **Visual:**
-- `background` - Background color
-- `color` - Text color
-- `border` - Border style and color
+- `background`, `color`, `text-*` - Applied by `Label`; other widgets retain constructor styles
+- `border` - Applied by `Panel`
+
+The base widget stores `opacity`, but rendering does not currently apply it.
+State selectors are matched when the stylesheet is applied; hover assignment and automatic style recomputation after state changes are not enabled yet.
 
 ### Hot Reload
 
@@ -170,19 +171,21 @@ end
 
 ## Event Handling
 
-Crystal TUI uses a **DOM-like event model** with capture and bubble phases, familiar to web developers:
+Crystal TUI routes events in a **DOM-like capture/child/bubble order**, familiar to web developers:
 
 ```
-CAPTURE (down):  App → Panel → Container → Button
-TARGET:          Button handles the event
-BUBBLE (up):     Button → Container → Panel → App
+CAPTURE HOOK:    App → Panel → Container (`on_capture`)
+CHILD/TARGET:    Button handles the event
+BUBBLE HOOK:     Button → Container → Panel → App (`on_event`)
 ```
 
 ### Event Phases
 
-1. **Capture Phase** - Event travels from root DOWN to target. Allows parent widgets to intercept events before they reach children.
-2. **Target Phase** - Event is at the target widget (deepest widget for mouse, focused widget for keyboard).
-3. **Bubble Phase** - Event travels from target UP to root. Allows parent widgets to react after children.
+1. **Capture hook** - `on_capture` runs before children and can intercept an event.
+2. **Child/target routing** - Mouse events visit children; key and paste events go to the focused widget.
+3. **Bubble hook** - `on_event` runs after children have had a chance to handle the event.
+
+The `Event::Phase`, `target`, and `current_target` accessors are reserved metadata: the current dispatcher does not populate them, so the phase predicates remain at their default state.
 
 ### Handling Events
 
@@ -199,7 +202,7 @@ class MyWidget < Tui::Widget
         return true
       end
     end
-    false
+    super
   end
 end
 ```
@@ -209,16 +212,19 @@ Override `on_capture` to intercept events BEFORE they reach children:
 ```crystal
 class MyApp < Tui::App
   # Global hotkeys - intercept before any child can handle
-  def on_capture(event : Tui::Event) : Nil
+  def on_capture(event : Tui::Event) : Bool
     if event.is_a?(Tui::KeyEvent)
       if event.modifiers.ctrl? && event.char == 's'
         save_document
         event.stop_propagation!  # Don't send to children
+        return true
       elsif event.modifiers.ctrl? && event.char == 'q'
         quit
         event.stop_propagation!
+        return true
       end
     end
+    super
   end
 end
 ```
@@ -229,21 +235,17 @@ end
 # Stop propagation to next widget (current widget's handlers still run)
 event.stop_propagation!
 
-# Stop immediately (no more handlers at all)
+# Stop propagation and set the immediate-stop flag
 event.stop_immediate!
 
-# Prevent default action (widget-specific behavior)
+# Set the default-prevented flag (built-in widgets do not consume it yet)
 event.prevent_default!
 
-# Check event phase
-event.capturing?    # In capture phase?
-event.at_target?    # At target widget?
-event.bubbling?     # In bubble phase?
-
-# Get target/current widget
-event.target          # Original target widget
-event.current_target  # Widget currently handling event
+# Phase/target metadata is reserved for a future dispatcher update.
+# `phase` remains `None`, and `target`/`current_target` remain nil today.
 ```
+
+`prevent_default!` and `stop_immediate!` currently set event flags; no widget consumes the default-prevented flag, and immediate-handler semantics are reserved for a future dispatcher update.
 
 ### Legacy Compatibility
 
@@ -260,7 +262,7 @@ See the `examples/` directory for complete examples:
 - `split_demo.cr` - SplitContainer
 - `new_widgets_demo.cr` - Header, Tree, Switch, Toast
 - `css_hot_reload_demo.cr` - CSS hot reload
-- `vscode_demo.cr` - IDE-style layout
+- `vscode_layout.cr` - IDE-style layout
 
 Run an example:
 
@@ -275,7 +277,10 @@ crystal run examples/hello.cr
 crystal spec
 
 # Build all examples
-crystal build examples/*.cr -o bin/
+mkdir -p bin
+for example in examples/*.cr; do
+  crystal build "$example" -o "bin/$(basename "$example" .cr)"
+done
 
 # Generate API docs (outputs to docs/)
 crystal docs

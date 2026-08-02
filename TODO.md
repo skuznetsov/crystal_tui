@@ -10,7 +10,7 @@
 - [x] Type selectors (`Button`)
 - [x] ID selectors (`#my-id`)
 - [x] Class selectors (`.active`)
-- [x] Pseudo-classes (`:focus`, `:visible`, `:disabled`)
+- [x] Match-time pseudo-classes (`:focus`, `:visible`, `:empty`); dynamic/state limitations are tracked below
 - [x] Compound selectors (`Button.active`)
 - [x] Universal selector (`*`)
 - [x] Variables (`$primary: cyan`)
@@ -25,17 +25,18 @@
 - [x] Dimension units: `px`, `%`, `fr`, `auto`
 
 ### Pseudo-classes ✓
-- [x] `:hover` - mouse hover state
+- [ ] `:hover` - matching exists, but runtime hover assignment is not automatic
 - [x] `:empty` - no children
 - [x] `:first-child`, `:last-child`, `:only-child`
-- [x] `:nth-child(n)` - nth child selector
-- [x] `:even`, `:odd` - even/odd children
-- [x] `:enabled`, `:disabled` - form states
+- [ ] `:nth-child(n)` - parser support is incomplete
+- [ ] `:even`, `:odd` - current index semantics are not CSS-compatible
+- [ ] `:enabled`, `:disabled` - widget state predicates are not wired consistently
 
 ### Recently Added (Phase 2) ✓
 - [x] Theme pseudo-classes: `:dark`, `:light`
 - [x] Text properties: `text-align`, `text-style`, `color`
-- [x] Grid layout: `Grid` container with `grid-columns`, `grid-rows`, `grid-gutter`, `column-span`, `row-span`
+- [x] Grid layout: `Grid` container with `grid-columns`, `grid-rows`, and `grid-gutter`
+- [x] Grid child spans via imperative `set_column_span` / `set_row_span` helpers (not CSS properties)
 
 ### Recently Added (Phase 3) ✓
 - [x] Dock property: `dock` (top, bottom, left, right)
@@ -43,19 +44,19 @@
 
 ### Recently Added (Phase 4) ✓
 - [x] Offset: `offset`, `offset-x`, `offset-y`
-- [x] Opacity: `opacity`, `text-opacity`
+- [x] Opacity properties are parsed and stored (`opacity`, `text-opacity`); rendering support is still pending
 - [x] Text wrap: `text-wrap` (wrap, nowrap)
 
 ### Recently Added (Phase 5) ✓
-- [x] **DOM-like Event Model** - Capture/bubble phases like web browsers:
-  - [x] `Event::Phase` enum (None, Capture, Target, Bubble)
+- [x] **DOM-like Event Routing** - Capture hook, child routing, and bubble hook:
+  - [x] `Event::Phase` enum is declared (dispatch metadata is not populated yet)
   - [x] `on_capture(event)` - Intercept events before children
-  - [x] `on_event(event)` - Handle at target and bubble phases
+  - [x] `on_event(event)` - Handle after child dispatch
   - [x] `event.stop_propagation!` - Stop event from continuing
-  - [x] `event.stop_immediate!` - Stop all further processing
-  - [x] `event.prevent_default!` - Prevent default action
-  - [x] `event.target` / `event.current_target` - Widget references
-  - [x] `event.capturing?` / `event.bubbling?` / `event.at_target?` - Phase checks
+  - [x] `event.stop_immediate!` - Set the immediate-stop flag (same-widget handling is pending)
+  - [x] `event.prevent_default!` - Set the default-prevented flag (widget consumers are pending)
+  - [ ] Populate `event.phase`, `event.target`, and `event.current_target` during dispatch
+  - [ ] Make `event.capturing?` / `event.bubbling?` / `event.at_target?` reflect dispatch state
   - [x] Backward compatible with widgets that override `handle_event`
 
 ### Missing (Priority: LOW)
@@ -72,13 +73,13 @@
   - [ ] `scrollbar-color`, `scrollbar-background`
 - [ ] CSS nesting with `&`
 - [ ] `!important` modifier
-- [ ] Live CSS reload (hot reload)
+- [x] Live CSS reload (polling-based hot reload via `TUI_DEV=1`)
 
 ---
 
 ## 2. Widgets
 
-### Current Widgets (41)
+### Current Widgets (48 concrete widget/container classes; 49 including abstract `View`)
 - [x] Panel - container with border/title
 - [x] Button - clickable button
 - [x] Label - text display
@@ -196,10 +197,10 @@ docs/
 
 ### Tasks
 - [ ] Set up documentation site (MkDocs/Docusaurus)
-- [ ] Write Getting Started guide
+- [x] Write Getting Started guide
 - [ ] Document each widget with examples
-- [ ] CSS reference with all properties
-- [ ] API documentation (crystal docs)
+- [x] CSS reference for implemented properties
+- [ ] Publish generated API documentation (`crystal docs` can generate it locally)
 - [ ] Interactive examples (if possible)
 - [ ] Video tutorials
 
@@ -216,9 +217,9 @@ docs/
 - [ ] Widget inspector (devtools)
 
 ### Testing
-- [ ] Widget testing helpers
+- [x] Widget testing helpers
 - [ ] Snapshot testing for renders
-- [ ] Event simulation helpers
+- [x] Event simulation helpers
 
 ---
 
@@ -237,7 +238,7 @@ docs/
 1. Descendant/child selectors
 2. Layout properties (width, height, margin, padding)
 3. More pseudo-classes (:hover, :first-child, etc.)
-4. Live CSS reload
+4. CSS hot reload
 
 ### Phase 2: Essential Widgets (Week 3-4)
 1. Header

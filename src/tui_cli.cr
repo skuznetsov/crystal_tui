@@ -67,7 +67,7 @@ module TuiCLI
           main: src/#{name}.cr
 
       dependencies:
-        tui:
+        crystal_tui:
           github: skuznetsov/crystal_tui
 
       crystal: ">= 1.10.0"
@@ -76,21 +76,23 @@ module TuiCLI
 
       # Create main file
       File.write("#{name}/src/#{name}.cr", <<-CRYSTAL
-      require "tui"
+      require "crystal_tui"
 
       class #{name.camelcase}App < Tui::App
         # Path to CSS file (optional)
-        @@css_path = "styles/app.tcss"
+        self.css_path = "styles/app.tcss"
 
         def compose : Array(Tui::Widget)
           [
             Tui::Panel.new("#{name.camelcase}", id: "main") do |panel|
-              panel.content = Tui::VBox.new do |vbox|
-                vbox.add_child Tui::Label.new("Welcome to #{name.camelcase}!", id: "welcome")
-                vbox.add_child Tui::Label.new("Press Ctrl+C to exit", id: "hint")
+              panel.content = Tui::VBox.new do
+                [
+                  Tui::Label.new("Welcome to #{name.camelcase}!", id: "welcome"),
+                  Tui::Label.new("Press Ctrl+C to exit", id: "hint"),
+                ] of Tui::Widget
               end
             end
-          ]
+          ] of Tui::Widget
         end
       end
 
@@ -104,11 +106,11 @@ module TuiCLI
 
       /* Variables */
       $primary: cyan;
-      $bg: #1a1a2e;
 
       /* Main panel */
       #main {
-        border: round $primary;
+        border-style: round;
+        border-color: $primary;
         padding: 1;
       }
 
@@ -151,7 +153,7 @@ module TuiCLI
 
       ## Development
 
-      Run with hot reload:
+      Run with CSS hot reload:
 
       ```bash
       TUI_DEV=1 crystal run src/#{name}.cr
@@ -192,7 +194,7 @@ module TuiCLI
         exit 1
       end
 
-      puts "Starting dev mode with hot reload..."
+      puts "Starting dev mode with CSS hot reload..."
       puts "Main file: #{main_file}"
       puts "Press Ctrl+C to stop"
       puts ""
@@ -268,14 +270,14 @@ module TuiCLI
 
       Commands:
         new <name>    Create a new Crystal TUI project
-        dev           Run in development mode with hot reload
+        dev           Run in development mode with CSS hot reload
         build         Build release binary
         version       Show version
         help          Show this help
 
       Examples:
         tui new myapp     Create new project 'myapp'
-        tui dev           Run current project with hot reload
+        tui dev           Run current project with CSS hot reload
         tui build         Build optimized binary
 
       Environment:
