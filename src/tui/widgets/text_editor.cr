@@ -1,4 +1,6 @@
 # Text Editor widget - Full-featured text editing
+require "set"
+
 module Tui
   class TextEditor < Widget
     struct Cursor
@@ -31,6 +33,19 @@ module Tui
       end
     end
 
+    # LSP-style fold: start_line stays visible; start_line+1..end_line hide when collapsed.
+    struct FoldRange
+      property start_line : Int32
+      property end_line : Int32
+
+      def initialize(@start_line : Int32, @end_line : Int32)
+      end
+
+      def valid? : Bool
+        @end_line > @start_line && @start_line >= 0
+      end
+    end
+
     @lines : Array(String) = [""]
     @cursor : Cursor = Cursor.new
     @selection : Selection?
@@ -39,6 +54,10 @@ module Tui
     @modified : Bool = false
     @path : Path?
     @title : String = "Untitled"
+    @fold_ranges : Array(FoldRange) = [] of FoldRange
+    @collapsed_folds : Set(Int32) = Set(Int32).new
+    @hidden_lines : Array(Bool) = [false]
+    @fold_starts : Hash(Int32, FoldRange) = {} of Int32 => FoldRange
 
     # Style
     property text_fg : Color = Color.white
@@ -49,14 +68,18 @@ module Tui
     property selection_bg : Color = Color.cyan
     property line_number_fg : Color = Color.yellow
     property line_number_bg : Color = Color.blue
-    property current_line_bg : Color = Color.palette(17)  # Slightly lighter
+    property fold_gutter_fg : Color = Color.rgb(120, 120, 120)
+    property fold_placeholder_fg : Color = Color.rgb(128, 128, 160)
+    property current_line_bg : Color = Color.palette(17) # Slightly lighter
     property show_line_numbers : Bool = true
+    property show_fold_gutter : Bool = true
     property tab_size : Int32 = 4
     property word_wrap : Bool = false
 
     # Callbacks
     @on_change : Proc(Nil)?
     @on_save : Proc(Path, Nil)?
+    @on_cell_style : Proc(Int32, Int32, Char, Style, Style)?
 
     def initialize(id : String? = nil)
       super(id)
@@ -69,6 +92,86 @@ module Tui
 
     def on_save(&block : Path -> Nil) : Nil
       @on_save = block
+    end
+
+    def on_cell_style(&block : Int32, Int32, Char, Style -> Style) : Nil
+      @on_cell_style = block
+    end
+
+    def fold_ranges : Array(FoldRange)
+      @fold_ranges
+    end
+
+    def set_fold_ranges(ranges : Array(FoldRange)) : Nil
+      previous_collapsed = @collapsed_folds.dup
+      @fold_ranges = ranges.select(&.valid?).sort_by { |range| {range.start_line, -range.end_line} }
+      @fold_starts = {} of Int32 => FoldRange
+      @fold_ranges.each do |range|
+        existing = @fold_starts[range.start_line]?
+        if existing.nil? || range.end_line > existing.end_line
+          @fold_starts[range.start_line] = range
+        end
+      end
+      @collapsed_folds = previous_collapsed.select { |line| @fold_starts.has_key?(line) }.to_set
+      rebuild_hidden_lines!
+      reveal_cursor_line!
+      ensure_cursor_visible
+      mark_dirty!
+    end
+
+    def clear_folds : Nil
+      return if @fold_ranges.empty? && @collapsed_folds.empty?
+      @fold_ranges = [] of FoldRange
+      @fold_starts = {} of Int32 => FoldRange
+      @collapsed_folds.clear
+      rebuild_hidden_lines!
+      mark_dirty!
+    end
+
+    def toggle_fold_at(line : Int32) : Bool
+      range = @fold_starts[line]?
+      return false unless range
+
+      if @collapsed_folds.includes?(line)
+        @collapsed_folds.delete(line)
+      else
+        @collapsed_folds.add(line)
+      end
+      rebuild_hidden_lines!
+      reveal_cursor_line!
+      ensure_cursor_visible
+      mark_dirty!
+      true
+    end
+
+    def toggle_fold_at_cursor : Bool
+      toggle_fold_at(@cursor.line)
+    end
+
+    def fold_marker_at(line : Int32) : Char?
+      return nil unless @fold_starts.has_key?(line)
+      @collapsed_folds.includes?(line) ? '+' : '-'
+    end
+
+    FOLD_PLACEHOLDER = " {...}"
+
+    def fold_placeholder_at(line : Int32) : String?
+      return nil unless @collapsed_folds.includes?(line)
+      FOLD_PLACEHOLDER
+    end
+
+    # True when `col` lands on the `{...}` after a collapsed header; expands the fold.
+    def expand_fold_at_placeholder?(line : Int32, col : Int32) : Bool
+      return false unless fold_placeholder_at(line)
+      return false if line < 0 || line >= @lines.size
+      start = @lines[line].size
+      return false unless col >= start && col < start + FOLD_PLACEHOLDER.size
+      toggle_fold_at(line)
+    end
+
+    def line_hidden?(line : Int32) : Bool
+      return false if line < 0 || line >= @hidden_lines.size
+      @hidden_lines[line]
     end
 
     def title : String
@@ -87,6 +190,28 @@ module Tui
       @lines
     end
 
+    def cursor : Cursor
+      @cursor
+    end
+
+    def cursor_line : Int32
+      @cursor.line
+    end
+
+    def cursor_col : Int32
+      @cursor.col
+    end
+
+    def set_cursor(line : Int32, col : Int32) : Nil
+      return if @lines.empty?
+
+      @cursor.line = line.clamp(0, @lines.size - 1)
+      @cursor.col = col.clamp(0, @lines[@cursor.line].size)
+      @selection = nil
+      ensure_cursor_visible
+      mark_dirty!
+    end
+
     def text : String
       @lines.join("\n")
     end
@@ -99,6 +224,7 @@ module Tui
       @scroll_x = 0
       @scroll_y = 0
       @modified = true
+      clear_folds
       mark_dirty!
     end
 
@@ -114,11 +240,13 @@ module Tui
         @scroll_x = 0
         @scroll_y = 0
         @modified = false
+        clear_folds
         mark_dirty!
         true
       rescue ex
         @lines = ["Error loading file:", ex.message || "Unknown error"]
         @modified = false
+        clear_folds
         mark_dirty!
         false
       end
@@ -323,8 +451,9 @@ module Tui
       update_selection_start if with_selection && !@selection
       clear_selection unless with_selection
 
-      if @cursor.line > 0
-        @cursor.line -= 1
+      target = previous_visible_line(@cursor.line)
+      if target
+        @cursor.line = target
         @cursor.col = @cursor.col.clamp(0, @lines[@cursor.line].size)
       end
 
@@ -337,8 +466,9 @@ module Tui
       update_selection_start if with_selection && !@selection
       clear_selection unless with_selection
 
-      if @cursor.line < @lines.size - 1
-        @cursor.line += 1
+      target = next_visible_line(@cursor.line)
+      if target
+        @cursor.line = target
         @cursor.col = @cursor.col.clamp(0, @lines[@cursor.line].size)
       end
 
@@ -434,8 +564,14 @@ module Tui
     end
 
     def page_up : Nil
-      visible_lines = content_height
-      @cursor.line = (@cursor.line - visible_lines).clamp(0, @lines.size - 1)
+      steps = content_height
+      line = @cursor.line
+      steps.times do
+        previous = previous_visible_line(line)
+        break unless previous
+        line = previous
+      end
+      @cursor.line = line
       @cursor.col = @cursor.col.clamp(0, @lines[@cursor.line].size)
       @selection = nil
       ensure_cursor_visible
@@ -443,8 +579,14 @@ module Tui
     end
 
     def page_down : Nil
-      visible_lines = content_height
-      @cursor.line = (@cursor.line + visible_lines).clamp(0, @lines.size - 1)
+      steps = content_height
+      line = @cursor.line
+      steps.times do
+        following = next_visible_line(line)
+        break unless following
+        line = following
+      end
+      @cursor.line = line
       @cursor.col = @cursor.col.clamp(0, @lines[@cursor.line].size)
       @selection = nil
       ensure_cursor_visible
@@ -461,6 +603,7 @@ module Tui
 
     private def text_changed : Nil
       @modified = true
+      clear_folds if @fold_ranges.any?
       @on_change.try &.call
       ensure_cursor_visible
       mark_dirty!
@@ -484,20 +627,111 @@ module Tui
       @show_line_numbers ? (@lines.size.to_s.size + 1) : 0
     end
 
+    private def fold_gutter_width : Int32
+      (@show_fold_gutter && !@fold_ranges.empty?) ? 1 : 0
+    end
+
+    private def gutter_width : Int32
+      fold_gutter_width + line_number_width
+    end
+
     private def content_width : Int32
-      @rect.width - line_number_width
+      @rect.width - gutter_width
     end
 
     private def content_height : Int32
       @rect.height
     end
 
+    private def rebuild_hidden_lines! : Nil
+      @hidden_lines = Array.new(@lines.size, false)
+      @collapsed_folds.each do |start_line|
+        range = @fold_starts[start_line]?
+        next unless range
+        line = range.start_line + 1
+        while line <= range.end_line && line < @hidden_lines.size
+          @hidden_lines[line] = true
+          line += 1
+        end
+      end
+    end
+
+    private def reveal_cursor_line! : Nil
+      return unless line_hidden?(@cursor.line)
+
+      changed = false
+      @fold_ranges.each do |range|
+        next unless @collapsed_folds.includes?(range.start_line)
+        next unless @cursor.line > range.start_line && @cursor.line <= range.end_line
+        @collapsed_folds.delete(range.start_line)
+        changed = true
+      end
+      rebuild_hidden_lines! if changed
+    end
+
+    private def next_visible_line(from : Int32) : Int32?
+      line = from + 1
+      while line < @lines.size
+        return line unless line_hidden?(line)
+        line += 1
+      end
+      nil
+    end
+
+    private def previous_visible_line(from : Int32) : Int32?
+      line = from - 1
+      while line >= 0
+        return line unless line_hidden?(line)
+        line -= 1
+      end
+      nil
+    end
+
+    private def first_visible_from(from : Int32) : Int32
+      line = from.clamp(0, Math.max(@lines.size - 1, 0))
+      return line unless line_hidden?(line)
+      next_visible_line(line - 1) || previous_visible_line(line + 1) || 0
+    end
+
+    private def document_line_at_visual_row(visual_row : Int32) : Int32
+      line = first_visible_from(@scroll_y)
+      row = 0
+      while row < visual_row
+        following = next_visible_line(line)
+        break unless following
+        line = following
+        row += 1
+      end
+      line
+    end
+
     private def ensure_cursor_visible : Nil
-      # Vertical scrolling
-      if @cursor.line < @scroll_y
-        @scroll_y = @cursor.line
-      elsif @cursor.line >= @scroll_y + content_height
-        @scroll_y = @cursor.line - content_height + 1
+      reveal_cursor_line!
+
+      # Vertical scrolling in document-line space, skipping hidden lines for height.
+      if @cursor.line < @scroll_y || line_hidden?(@scroll_y)
+        @scroll_y = first_visible_from(@cursor.line)
+      else
+        visible_count = 0
+        line = first_visible_from(@scroll_y)
+        while visible_count < content_height && line <= @cursor.line
+          visible_count += 1
+          break if line == @cursor.line
+          following = next_visible_line(line)
+          break unless following
+          line = following
+        end
+        if visible_count >= content_height && line != @cursor.line
+          # Scroll forward until cursor fits in the last row.
+          @scroll_y = @cursor.line
+          remaining = content_height - 1
+          while remaining > 0
+            previous = previous_visible_line(@scroll_y)
+            break unless previous
+            @scroll_y = previous
+            remaining -= 1
+          end
+        end
       end
 
       # Horizontal scrolling
@@ -515,62 +749,91 @@ module Tui
 
       text_style = Style.new(fg: @text_fg, bg: @text_bg)
       line_num_style = Style.new(fg: @line_number_fg, bg: @line_number_bg)
+      fold_style = Style.new(fg: @fold_gutter_fg, bg: @line_number_bg)
+      placeholder_style = Style.new(fg: @fold_placeholder_fg, bg: @text_bg)
       cursor_style = Style.new(fg: @cursor_fg, bg: @cursor_bg)
       selection_style = Style.new(fg: @selection_fg, bg: @selection_bg)
       current_line_style = Style.new(fg: @text_fg, bg: @current_line_bg)
 
+      fold_width = fold_gutter_width
       ln_width = line_number_width
-      visible_lines = content_height
+      visible_rows = content_height
+      doc_line = first_visible_from(@scroll_y)
 
-      visible_lines.times do |i|
-        line_idx = @scroll_y + i
-        y = @rect.y + i
+      visible_rows.times do |row|
+        y = @rect.y + row
 
-        if line_idx >= @lines.size
-          # Clear empty lines
+        if doc_line >= @lines.size
           @rect.width.times do |x|
             buffer.set(@rect.x + x, y, ' ', text_style) if clip.contains?(@rect.x + x, y)
           end
           next
         end
 
-        is_current_line = line_idx == @cursor.line
+        is_current_line = doc_line == @cursor.line
         base_style = is_current_line && focused? ? current_line_style : text_style
+        x_offset = 0
 
-        # Draw line number
+        if fold_width > 0
+          marker = fold_marker_at(doc_line) || ' '
+          buffer.set(@rect.x, y, marker, fold_style) if clip.contains?(@rect.x, y)
+          x_offset = 1
+        end
+
         if @show_line_numbers
-          num_str = (line_idx + 1).to_s.rjust(ln_width - 1)
+          num_str = (doc_line + 1).to_s.rjust(ln_width - 1)
           num_str.each_char_with_index do |char, ci|
-            buffer.set(@rect.x + ci, y, char, line_num_style) if clip.contains?(@rect.x + ci, y)
+            buffer.set(@rect.x + x_offset + ci, y, char, line_num_style) if clip.contains?(@rect.x + x_offset + ci, y)
           end
         end
 
-        # Draw line content
-        line = @lines[line_idx]
-        content_x = @rect.x + ln_width
+        line = @lines[doc_line]
+        content_x = @rect.x + gutter_width
+        placeholder = fold_placeholder_at(doc_line)
+        placeholder_start = line.size
+        line_placeholder_style = is_current_line && focused? ? Style.new(fg: @fold_placeholder_fg, bg: @current_line_bg) : placeholder_style
 
-        (content_width).times do |col|
+        content_width.times do |col|
           text_col = @scroll_x + col
           x = content_x + col
 
-          char = if text_col < line.size
+          placeholder_index = text_col - placeholder_start
+          in_placeholder = false
+          placeholder_char = ' '
+          if ph = placeholder
+            if placeholder_index >= 0 && placeholder_index < ph.size
+              in_placeholder = true
+              placeholder_char = ph[placeholder_index]
+            end
+          end
+
+          char = if in_placeholder
+                   placeholder_char
+                 elsif text_col < line.size
                    c = line[text_col]
                    c == '\t' ? ' ' : c
                  else
                    ' '
                  end
 
-          # Determine style
-          style = if is_cursor_at?(line_idx, text_col) && focused?
+          style = if is_cursor_at?(doc_line, text_col) && focused? && !in_placeholder
                     cursor_style
-                  elsif in_selection?(line_idx, text_col)
+                  elsif in_placeholder
+                    line_placeholder_style
+                  elsif in_selection?(doc_line, text_col)
                     selection_style
+                  elsif style_callback = @on_cell_style
+                    style_callback.call(doc_line, text_col, char, base_style)
                   else
                     base_style
                   end
 
           buffer.set(x, y, char, style) if clip.contains?(x, y)
         end
+
+        following = next_visible_line(doc_line)
+        break unless following
+        doc_line = following
       end
     end
 
@@ -667,7 +930,7 @@ module Tui
         insert_newline
         true
       when .tab?
-        insert_text("  ")  # 2 spaces for tab
+        insert_text("  ") # 2 spaces for tab
         true
       else
         if ctrl
@@ -710,23 +973,29 @@ module Tui
 
       case event.action
       when MouseAction::Press
-        # Click to position cursor
         rel_x, rel_y = event.relative_to(@rect)
-        text_x = rel_x - line_number_width + @scroll_x
-        text_y = rel_y + @scroll_y
+        doc_line = document_line_at_visual_row(rel_y)
 
-        if text_y < @lines.size
-          @cursor.line = text_y
-          @cursor.col = text_x.clamp(0, @lines[text_y].size)
+        if fold_gutter_width > 0 && rel_x < fold_gutter_width
+          toggle_fold_at(doc_line)
+          return true
+        end
+
+        text_x = rel_x - gutter_width + @scroll_x
+        if doc_line < @lines.size
+          if expand_fold_at_placeholder?(doc_line, text_x)
+            return true
+          end
+          @cursor.line = doc_line
+          @cursor.col = text_x.clamp(0, @lines[doc_line].size)
           @selection = nil
           mark_dirty!
         end
         true
       when MouseAction::Drag
-        # Selection
         rel_x, rel_y = event.relative_to(@rect)
-        text_x = rel_x - line_number_width + @scroll_x
-        text_y = (rel_y + @scroll_y).clamp(0, @lines.size - 1)
+        text_x = rel_x - gutter_width + @scroll_x
+        text_y = document_line_at_visual_row(rel_y).clamp(0, @lines.size - 1)
 
         unless @selection
           @selection = Selection.new(@cursor.line, @cursor.col, @cursor.line, @cursor.col)
