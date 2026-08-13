@@ -73,6 +73,8 @@ module Tui
     property current_line_bg : Color = Color.palette(17) # Slightly lighter
     property show_line_numbers : Bool = true
     property show_fold_gutter : Bool = true
+    property show_scrollbar : Bool = true
+    property scroll_lines : Int32 = 3
     property tab_size : Int32 = 4
     property word_wrap : Bool = false
 
@@ -80,10 +82,14 @@ module Tui
     @on_change : Proc(Nil)?
     @on_save : Proc(Path, Nil)?
     @on_cell_style : Proc(Int32, Int32, Char, Style, Style)?
+    @v_scrollbar : ScrollBar
 
     def initialize(id : String? = nil)
       super(id)
       @focusable = true
+      @v_scrollbar = ScrollBar.new(id ? "#{id}:v-scroll" : "text-editor:v-scroll", ScrollBar::Orientation::Vertical)
+      @v_scrollbar.show_arrows = false
+      @v_scrollbar.on_scroll { |offset| apply_scrollbar_offset(offset) }
     end
 
     def on_change(&block : -> Nil) : Nil
@@ -172,6 +178,21 @@ module Tui
     def line_hidden?(line : Int32) : Bool
       return false if line < 0 || line >= @hidden_lines.size
       @hidden_lines[line]
+    end
+
+    def scroll_y : Int32
+      @scroll_y
+    end
+
+    def scroll_view_by(lines : Int32) : Nil
+      return if lines == 0 || @lines.empty?
+
+      offset = visible_index_of(@scroll_y) + lines
+      apply_scrollbar_offset(offset)
+    end
+
+    def v_scrollbar : ScrollBar
+      @v_scrollbar
     end
 
     def title : String
@@ -631,16 +652,71 @@ module Tui
       (@show_fold_gutter && !@fold_ranges.empty?) ? 1 : 0
     end
 
+    private def scrollbar_width : Int32
+      (@show_scrollbar && needs_scrollbar?) ? 1 : 0
+    end
+
+    private def needs_scrollbar? : Bool
+      return false if @rect.height <= 0
+      visible_line_count > @rect.height
+    end
+
     private def gutter_width : Int32
       fold_gutter_width + line_number_width
     end
 
     private def content_width : Int32
-      @rect.width - gutter_width
+      (@rect.width - gutter_width - scrollbar_width).clamp(0, Int32::MAX)
     end
 
     private def content_height : Int32
       @rect.height
+    end
+
+    private def visible_line_count : Int32
+      count = 0
+      @lines.size.times do |line|
+        count += 1 unless line_hidden?(line)
+      end
+      count
+    end
+
+    private def visible_index_of(doc_line : Int32) : Int32
+      index = 0
+      limit = doc_line.clamp(0, @lines.size)
+      limit.times do |line|
+        index += 1 unless line_hidden?(line)
+      end
+      index
+    end
+
+    private def document_line_at_visible_index(visible_index : Int32) : Int32
+      return 0 if @lines.empty?
+      index = 0
+      last_visible = 0
+      @lines.size.times do |line|
+        next if line_hidden?(line)
+        last_visible = line
+        return line if index == visible_index
+        index += 1
+      end
+      last_visible
+    end
+
+    private def max_scrollbar_offset : Int32
+      (visible_line_count - content_height).clamp(0, Int32::MAX)
+    end
+
+    private def apply_scrollbar_offset(offset : Int32) : Nil
+      clamped = offset.clamp(0, max_scrollbar_offset)
+      @scroll_y = document_line_at_visible_index(clamped)
+      mark_dirty!
+    end
+
+    private def sync_scrollbar! : Nil
+      @v_scrollbar.thumb_active_color = focused? ? Color.cyan : @v_scrollbar.thumb_color
+      @v_scrollbar.rect = Rect.new(@rect.right - 1, @rect.y, 1, @rect.height)
+      @v_scrollbar.update(visible_line_count, content_height, visible_index_of(@scroll_y))
     end
 
     private def rebuild_hidden_lines! : Nil
@@ -835,6 +911,11 @@ module Tui
         break unless following
         doc_line = following
       end
+
+      if @show_scrollbar && needs_scrollbar?
+        sync_scrollbar!
+        @v_scrollbar.render(buffer, clip)
+      end
     end
 
     private def is_cursor_at?(line : Int32, col : Int32) : Bool
@@ -860,20 +941,20 @@ module Tui
     end
 
     def on_event(event : Event) : Bool
-      return false unless focused?
-
       case event
+      when MouseEvent
+        if handle_mouse(event)
+          event.stop!
+          return true
+        end
       when PasteEvent
+        return false unless focused?
         paste(event.text)
         event.stop!
         return true
       when KeyEvent
+        return false unless focused?
         if handle_key(event)
-          event.stop!
-          return true
-        end
-      when MouseEvent
-        if handle_mouse(event)
           event.stop!
           return true
         end
@@ -969,10 +1050,28 @@ module Tui
     end
 
     private def handle_mouse(event : MouseEvent) : Bool
-      return false unless event.in_rect?(@rect)
+      return false unless event.in_rect?(@rect) || @v_scrollbar.dragging?
+
+      if @show_scrollbar && needs_scrollbar?
+        sync_scrollbar!
+        if @v_scrollbar.hit_test?(event.x, event.y) || @v_scrollbar.dragging?
+          focus unless focused?
+          return @v_scrollbar.on_event(event)
+        end
+      end
+
+      if event.button.wheel_up?
+        scroll_view_by(-@scroll_lines)
+        return true
+      elsif event.button.wheel_down?
+        scroll_view_by(@scroll_lines)
+        return true
+      end
 
       case event.action
       when MouseAction::Press
+        focus unless focused?
+
         rel_x, rel_y = event.relative_to(@rect)
         doc_line = document_line_at_visual_row(rel_y)
 
@@ -993,6 +1092,7 @@ module Tui
         end
         true
       when MouseAction::Drag
+        focus unless focused?
         rel_x, rel_y = event.relative_to(@rect)
         text_x = rel_x - gutter_width + @scroll_x
         text_y = document_line_at_visual_row(rel_y).clamp(0, @lines.size - 1)

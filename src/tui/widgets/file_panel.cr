@@ -492,27 +492,26 @@ module Tui
 
     def on_event(event : Event) : Bool
       return false if event.stopped?
-      return false unless focused?
 
       case event
-      when KeyEvent
-        if handle_key(event)
-          event.stop!
-          return true
-        end
       when MouseEvent
-        if event.button.left? && event.action.press?
-          if @rect.contains?(event.x, event.y)
-            handle_click(event.x, event.y)
-            event.stop!
-            return true
-          end
-        elsif event.button.wheel_up?
+        if event.button.wheel_up? && event.in_rect?(@rect)
           move_cursor(-3)
           event.stop!
           return true
-        elsif event.button.wheel_down?
+        elsif event.button.wheel_down? && event.in_rect?(@rect)
           move_cursor(3)
+          event.stop!
+          return true
+        elsif event.button.left? && event.action.press? && @rect.contains?(event.x, event.y)
+          focus unless focused?
+          handle_click(event.x, event.y)
+          event.stop!
+          return true
+        end
+      when KeyEvent
+        return false unless focused?
+        if handle_key(event)
           event.stop!
           return true
         end
