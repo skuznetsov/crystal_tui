@@ -82,6 +82,7 @@ module Tui
     @on_change : Proc(Nil)?
     @on_save : Proc(Path, Nil)?
     @on_cell_style : Proc(Int32, Int32, Char, Style, Style)?
+    @on_hyperclick : Proc(Int32, Int32, Modifiers, Nil)?
     @v_scrollbar : ScrollBar
 
     def initialize(id : String? = nil)
@@ -102,6 +103,10 @@ module Tui
 
     def on_cell_style(&block : Int32, Int32, Char, Style -> Style) : Nil
       @on_cell_style = block
+    end
+
+    def on_hyperclick(&block : Int32, Int32, Modifiers -> Nil) : Nil
+      @on_hyperclick = block
     end
 
     def fold_ranges : Array(FoldRange)
@@ -1082,6 +1087,16 @@ module Tui
 
         text_x = rel_x - gutter_width + @scroll_x
         if doc_line < @lines.size
+          if event.button.left? && event.alt?
+            col = text_x.clamp(0, @lines[doc_line].size)
+            @cursor.line = doc_line
+            @cursor.col = col
+            @selection = nil
+            mark_dirty!
+            @on_hyperclick.try(&.call(doc_line, col, event.modifiers))
+            return true
+          end
+
           if expand_fold_at_placeholder?(doc_line, text_x)
             return true
           end

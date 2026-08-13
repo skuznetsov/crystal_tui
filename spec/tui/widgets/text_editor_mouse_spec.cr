@@ -43,4 +43,35 @@ describe Tui::TextEditor do
     editor.v_scrollbar.total.should eq 21
     editor.v_scrollbar.viewport.should eq 5
   end
+
+  it "fires on_hyperclick for Option/Alt+Click and moves the cursor" do
+    editor = Tui::TextEditor.new("hyperclick")
+    editor.rect = Tui::Rect.new(0, 0, 40, 10)
+    editor.text = "hello world\nsecond line\n"
+    editor.focus
+
+    got_line = -1
+    got_col = -1
+    got_mods = Tui::Modifiers::None
+    editor.on_hyperclick do |line, col, modifiers|
+      got_line = line
+      got_col = col
+      got_mods = modifiers
+    end
+
+    # Content starts after gutter (line numbers on by default → width depends on line count)
+    # Click roughly on "world" of first line: y=0 of editor rect
+    event = Tui::MouseEvent.new(
+      editor.rect.x + 12,
+      editor.rect.y,
+      Tui::MouseButton::Left,
+      Tui::MouseAction::Press,
+      Tui::Modifiers::Alt
+    )
+    editor.handle_event(event).should be_true
+    got_mods.alt?.should be_true
+    got_line.should eq 0
+    editor.cursor_line.should eq 0
+    got_col.should eq editor.cursor_col
+  end
 end
