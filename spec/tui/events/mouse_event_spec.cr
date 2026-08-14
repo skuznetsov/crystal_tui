@@ -196,6 +196,11 @@ describe "Panel scroll events" do
 end
 
 describe "SplitContainer drag events" do
+  before_each do
+    Tui::Widget.mouse_capture = nil
+    Tui::Widget.handling_capture = false
+  end
+
   it "starts dragging on press over splitter" do
     split = Tui::SplitContainer.new(direction: Tui::SplitContainer::Direction::Horizontal)
     split.rect = Tui::Rect.new(0, 0, 40, 20)

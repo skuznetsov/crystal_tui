@@ -94,7 +94,16 @@ describe Tui::Markdown::Parser do
 
     it "parses bold with __" do
       doc = Tui::Markdown.parse("This is __bold__ text")
+      doc[0].elements.size.should eq 3
       doc[0].elements[1].type.should eq Tui::Markdown::InlineType::Bold
+      doc[0].elements[1].text.should eq "bold"
+    end
+
+    it "does not treat underscores inside an identifier as bold" do
+      doc = Tui::Markdown.parse("See variable_names_with_underscores here")
+      doc[0].elements.size.should eq 1
+      doc[0].elements[0].type.should eq Tui::Markdown::InlineType::Text
+      doc[0].elements[0].text.should eq "See variable_names_with_underscores here"
     end
 
     it "parses italic with *" do
@@ -106,6 +115,14 @@ describe Tui::Markdown::Parser do
     it "parses italic with _" do
       doc = Tui::Markdown.parse("This is _italic_ text")
       doc[0].elements[1].type.should eq Tui::Markdown::InlineType::Italic
+      doc[0].elements[1].text.should eq "italic"
+    end
+
+    it "does not treat underscores inside an identifier as italic" do
+      doc = Tui::Markdown.parse("See variable_names_with_underscores here")
+      doc[0].elements.size.should eq 1
+      doc[0].elements[0].type.should eq Tui::Markdown::InlineType::Text
+      doc[0].elements[0].text.should eq "See variable_names_with_underscores here"
     end
 
     it "parses bold+italic with ***" do

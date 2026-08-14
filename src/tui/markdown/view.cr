@@ -1133,7 +1133,7 @@ module Tui
                 end
 
                 # Apply cursor highlight (inverted colors)
-                if @show_cursor && line_idx == @cursor_line && char_idx == @cursor_col
+                if @show_cursor && focused? && line_idx == @cursor_line && char_idx == @cursor_col
                   final_style = Style.new(fg: Color.black, bg: Color.palette(250), attrs: final_style.attrs)
                 end
 
@@ -1157,7 +1157,7 @@ module Tui
         end
 
         # Draw cursor at end of line if cursor position is past all characters
-        if @show_cursor && line_idx == @cursor_line && char_idx == @cursor_col
+        if @show_cursor && focused? && line_idx == @cursor_line && char_idx == @cursor_col
           cursor_x_pos = virtual_col - @scroll_x
           if cursor_x_pos >= 0 && cursor_x_pos < content_width
             cursor_style = Style.new(fg: Color.black, bg: Color.palette(250))

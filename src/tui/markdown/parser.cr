@@ -437,7 +437,8 @@ module Tui
           remaining = text[pos..]
 
           # Bold+Italic: ***text*** only
-          # Note: ___ style disabled to protect variable_names_with_underscores
+          # Note: ___ style not supported (only *** is), consistent with Bold/Italic
+          # below which support ** and __ / * and _ respectively
           if m = remaining.match(/^\*\*\*(.+?)\*\*\*/)
             flush_text(elements, current_text)
             current_text = ""
@@ -457,14 +458,37 @@ module Tui
           end
 
           # Italic: *text* only
-          # Note: _ style disabled to protect variable_names_with_underscores
-          # Using only asterisks for emphasis avoids breaking code identifiers
           if m = remaining.match(/^\*([^*]+?)\*/)
             flush_text(elements, current_text)
             current_text = ""
             elements << InlineElement.new(InlineType::Italic, m[1])
             pos += m[0].size
             next
+          end
+
+          # Bold: __text__
+          # Only at word boundaries, so identifiers like variable_names_with_underscores
+          # are left untouched (an opening delimiter can't be preceded by a word char).
+          if remaining.starts_with?("__") && !intraword_boundary?(text, pos)
+            if m = remaining.match(/^__(.+?)__(?!\w)/)
+              flush_text(elements, current_text)
+              current_text = ""
+              elements << InlineElement.new(InlineType::Bold, m[1])
+              pos += m[0].size
+              next
+            end
+          end
+
+          # Italic: _text_
+          # Same word-boundary guard as __ above.
+          if remaining.starts_with?("_") && !remaining.starts_with?("__") && !intraword_boundary?(text, pos)
+            if m = remaining.match(/^_([^_]+?)_(?!\w)/)
+              flush_text(elements, current_text)
+              current_text = ""
+              elements << InlineElement.new(InlineType::Italic, m[1])
+              pos += m[0].size
+              next
+            end
           end
 
           # Strikethrough: ~~text~~
@@ -514,6 +538,18 @@ module Tui
       private def flush_text(elements : Array(InlineElement), text : String) : Nil
         return if text.empty?
         elements << InlineElement.new(InlineType::Text, text)
+      end
+
+      # True if the underscore delimiter at `pos` sits immediately after a word
+      # character, i.e. it's part of an identifier (variable_names_with_underscores)
+      # rather than a standalone emphasis delimiter.
+      private def intraword_boundary?(text : String, pos : Int32) : Bool
+        return false if pos == 0
+        word_char?(text[pos - 1])
+      end
+
+      private def word_char?(char : Char) : Bool
+        char.alphanumeric? || char == '_'
       end
     end
 

@@ -2,10 +2,13 @@
 # Based on wcwidth (https://github.com/jquast/wcwidth) and Unicode Standard Annex #11
 # Tables from Unicode 15.0
 require "string/grapheme"
-lib LibC
-  alias WCharT = Int32
-  fun wcwidth(c : WCharT) : Int32
-end
+
+{% unless flag?(:win32) %}
+  lib LibC
+    alias WCharT = Int32
+    fun wcwidth(c : WCharT) : Int32
+  end
+{% end %}
 
 module Tui
   module Unicode
@@ -459,6 +462,16 @@ module Tui
       {0x2600, 0x27BF},   # Misc symbols + Dingbats
     ]
 
+    # Windows' C runtime has no wcwidth(); report "unknown" (-1) so
+    # char_width falls back to the Unicode range tables below.
+    private def self.wcwidth(codepoint : Int32) : Int32
+      {% if flag?(:win32) %}
+        -1
+      {% else %}
+        LibC.wcwidth(codepoint)
+      {% end %}
+    end
+
     # Binary search in sorted ranges
     private def self.in_ranges?(codepoint : Int32, ranges : Array(Tuple(Int32, Int32))) : Bool
       low = 0
@@ -491,7 +504,7 @@ module Tui
       # Zero-width characters (combining marks, format chars, etc.)
       return 0 if in_ranges?(codepoint, ZERO_WIDTH)
 
-      sys_width = LibC.wcwidth(codepoint)
+      sys_width = wcwidth(codepoint)
       if sys_width >= 0
         # Override when terminals render emoji/symbols as wide but wcwidth reports 1.
         if sys_width == 1 && (in_ranges?(codepoint, WIDE_CHARS) || (ambiguous_wide? && in_ranges?(codepoint, EMOJI_WIDE)))
