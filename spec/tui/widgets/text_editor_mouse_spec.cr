@@ -91,4 +91,17 @@ describe Tui::TextEditor do
     editor.handle_event(event).should be_true
     fired.should be_true
   end
+
+  it "scrolls on the first move_down from the last visible row" do
+    editor = Tui::TextEditor.new("scroll-last-row")
+    editor.rect = Tui::Rect.new(0, 0, 40, 5)
+    editor.text = (0..20).map { |i| "line #{i}" }.join("\n")
+    editor.set_cursor(4, 0)
+    editor.cursor_line.should eq 4
+    editor.scroll_y.should eq 0
+
+    editor.move_down
+    editor.cursor_line.should eq 5
+    editor.scroll_y.should eq 1
+  end
 end

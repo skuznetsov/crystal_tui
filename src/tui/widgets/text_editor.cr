@@ -788,30 +788,20 @@ module Tui
 
     private def ensure_cursor_visible : Nil
       reveal_cursor_line!
+      return if @lines.empty?
 
       # Vertical scrolling in document-line space, skipping hidden lines for height.
       if @cursor.line < @scroll_y || line_hidden?(@scroll_y)
         @scroll_y = first_visible_from(@cursor.line)
-      else
-        visible_count = 0
-        line = first_visible_from(@scroll_y)
-        while visible_count < content_height && line <= @cursor.line
-          visible_count += 1
-          break if line == @cursor.line
-          following = next_visible_line(line)
-          break unless following
-          line = following
-        end
-        if visible_count >= content_height && line != @cursor.line
-          # Scroll forward until cursor fits in the last row.
-          @scroll_y = @cursor.line
-          remaining = content_height - 1
-          while remaining > 0
-            previous = previous_visible_line(@scroll_y)
-            break unless previous
-            @scroll_y = previous
-            remaining -= 1
-          end
+      elsif !cursor_in_viewport?
+        # Put the cursor on the last visible row.
+        @scroll_y = @cursor.line
+        remaining = Math.max(content_height - 1, 0)
+        while remaining > 0
+          previous = previous_visible_line(@scroll_y)
+          break unless previous
+          @scroll_y = previous
+          remaining -= 1
         end
       end
 
@@ -822,6 +812,19 @@ module Tui
       elsif visible_col >= content_width - 1
         @scroll_x = @cursor.col - content_width + 2
       end
+    end
+
+    private def cursor_in_viewport? : Bool
+      return false if content_height <= 0
+
+      line = first_visible_from(@scroll_y)
+      content_height.times do
+        return true if line == @cursor.line
+        following = next_visible_line(line)
+        return false unless following
+        line = following
+      end
+      false
     end
 
     def render(buffer : Buffer, clip : Rect) : Nil
