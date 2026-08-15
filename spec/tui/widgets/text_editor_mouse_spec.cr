@@ -44,7 +44,7 @@ describe Tui::TextEditor do
     editor.v_scrollbar.viewport.should eq 5
   end
 
-  it "fires on_hyperclick for Option/Alt+Click and moves the cursor" do
+  it "fires on_hyperclick for Shift+Click and moves the cursor" do
     editor = Tui::TextEditor.new("hyperclick")
     editor.rect = Tui::Rect.new(0, 0, 40, 10)
     editor.text = "hello world\nsecond line\n"
@@ -59,19 +59,36 @@ describe Tui::TextEditor do
       got_mods = modifiers
     end
 
-    # Content starts after gutter (line numbers on by default → width depends on line count)
-    # Click roughly on "world" of first line: y=0 of editor rect
     event = Tui::MouseEvent.new(
       editor.rect.x + 12,
       editor.rect.y,
       Tui::MouseButton::Left,
       Tui::MouseAction::Press,
-      Tui::Modifiers::Alt
+      Tui::Modifiers::Shift
     )
     editor.handle_event(event).should be_true
-    got_mods.alt?.should be_true
+    got_mods.shift?.should be_true
     got_line.should eq 0
     editor.cursor_line.should eq 0
     got_col.should eq editor.cursor_col
+  end
+
+  it "fires on_hyperclick for middle-click" do
+    editor = Tui::TextEditor.new("hyperclick-middle")
+    editor.rect = Tui::Rect.new(0, 0, 40, 10)
+    editor.text = "hello world\n"
+    editor.focus
+
+    fired = false
+    editor.on_hyperclick { |_line, _col, _mods| fired = true }
+
+    event = Tui::MouseEvent.new(
+      editor.rect.x + 12,
+      editor.rect.y,
+      Tui::MouseButton::Middle,
+      Tui::MouseAction::Press
+    )
+    editor.handle_event(event).should be_true
+    fired.should be_true
   end
 end

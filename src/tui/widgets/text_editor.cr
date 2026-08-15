@@ -1087,7 +1087,9 @@ module Tui
 
         text_x = rel_x - gutter_width + @scroll_x
         if doc_line < @lines.size
-          if event.button.left? && event.alt?
+          # iTerm2 SGR mouse reliably reports Shift; Ctrl is intercepted and
+          # Option often does not set the Alt bit. Middle-click has no modifier.
+          if hyperclick_mouse?(event)
             col = text_x.clamp(0, @lines[doc_line].size)
             @cursor.line = doc_line
             @cursor.col = col
@@ -1125,6 +1127,12 @@ module Tui
       else
         false
       end
+    end
+
+    private def hyperclick_mouse?(event : MouseEvent) : Bool
+      return true if event.button.middle?
+      return false unless event.button.left?
+      event.shift? || event.alt? || event.ctrl?
     end
   end
 end
