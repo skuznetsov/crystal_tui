@@ -173,7 +173,7 @@ lib LibC
     ws_ypixel : UInt16
   end
 
-  {% if flag?(:darwin) %}
+  {% if flag?(:darwin) || flag?(:freebsd) %}
     TIOCGWINSZ = 0x40087468_u64
   {% else %}
     TIOCGWINSZ = 0x5413_u64
