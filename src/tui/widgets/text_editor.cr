@@ -305,7 +305,7 @@ module Tui
 
     def save_as(path : Path) : Bool
       begin
-        File.write(path.to_s, text)
+        atomic_write(path, text)
         @path = path
         @title = path.basename
         @modified = false
@@ -315,6 +315,39 @@ module Tui
         true
       rescue
         false
+      end
+    end
+
+    private def atomic_write(path : Path, content : String) : Nil
+      target = if File.info?(path, follow_symlinks: false).try(&.symlink?)
+                 Path.new(File.realpath(path))
+               else
+                 path.expand
+               end
+      permissions = File.info?(target).try(&.permissions.to_i)
+      parent = target.parent
+      temporary = File.tempfile(".#{target.basename}.adamantine-", nil, dir: parent.to_s)
+      temporary_path = Path.new(temporary.path)
+      renamed = false
+
+      begin
+        temporary << content
+        temporary.flush
+        File.chmod(temporary_path, permissions) if permissions
+        temporary.fsync
+        temporary.close
+        File.rename(temporary_path, target)
+        renamed = true
+
+        begin
+          File.open(parent.to_s) { |directory| directory.fsync }
+        rescue
+          # Some platforms do not permit opening directories. The file itself
+          # is already durable and atomically visible at this point.
+        end
+      ensure
+        temporary.close unless temporary.closed?
+        File.delete(temporary_path) if !renamed && File.exists?(temporary_path)
       end
     end
 

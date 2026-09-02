@@ -25,6 +25,34 @@ describe Tui::TextEditor do
     end
   end
 
+  it "atomically replaces the file while preserving permissions" do
+    with_editor_file("before\n") do |editor, path|
+      File.chmod(path, 0o640)
+      original = File.info(path)
+      editor.load_file(path).should be_true
+      editor.text = "after\n"
+
+      editor.save.should be_true
+      replacement = File.info(path)
+      original.same_file?(replacement).should be_false
+      replacement.permissions.to_i.should eq(0o640)
+      File.read(path).should eq("after\n")
+    end
+  end
+
+  it "updates a symlink target without replacing the symlink" do
+    with_editor_file("before\n") do |editor, target|
+      link = target.parent / "sample-link.txt"
+      File.symlink(target.basename.to_s, link)
+      editor.load_file(link).should be_true
+      editor.text = "after\n"
+
+      editor.save.should be_true
+      File.info(link, follow_symlinks: false).symlink?.should be_true
+      File.read(target).should eq("after\n")
+    end
+  end
+
   it "replaces the complete document as one undoable edit" do
     editor = Tui::TextEditor.new("replace-all")
     editor.text = "old old\n"
