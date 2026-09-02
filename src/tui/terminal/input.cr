@@ -19,43 +19,57 @@ module Tui
     @wakeup_scheduled : Bool = false
 
     # Byte constants for parsing
-    BYTE_0 = '0'.ord.to_u8
-    BYTE_9 = '9'.ord.to_u8
+    BYTE_0         = '0'.ord.to_u8
+    BYTE_9         = '9'.ord.to_u8
     BYTE_SEMICOLON = ';'.ord.to_u8
+    BYTE_COLON     = ':'.ord.to_u8
     BYTE_LESS_THAN = '<'.ord.to_u8
-    BYTE_UPPER_A = 'A'.ord.to_u8
-    BYTE_UPPER_B = 'B'.ord.to_u8
-    BYTE_UPPER_C = 'C'.ord.to_u8
-    BYTE_UPPER_D = 'D'.ord.to_u8
-    BYTE_UPPER_F = 'F'.ord.to_u8
-    BYTE_UPPER_H = 'H'.ord.to_u8
-    BYTE_UPPER_M = 'M'.ord.to_u8
-    BYTE_UPPER_O = 'O'.ord.to_u8
-    BYTE_UPPER_P = 'P'.ord.to_u8
-    BYTE_UPPER_Q = 'Q'.ord.to_u8
-    BYTE_UPPER_R = 'R'.ord.to_u8
-    BYTE_UPPER_S = 'S'.ord.to_u8
-    BYTE_LOWER_M = 'm'.ord.to_u8
-    BYTE_TILDE = '~'.ord.to_u8
-    BYTE_BRACKET = '['.ord.to_u8
-    BYTE_ESC = 27_u8
+    BYTE_UPPER_A   = 'A'.ord.to_u8
+    BYTE_UPPER_B   = 'B'.ord.to_u8
+    BYTE_UPPER_C   = 'C'.ord.to_u8
+    BYTE_UPPER_D   = 'D'.ord.to_u8
+    BYTE_UPPER_F   = 'F'.ord.to_u8
+    BYTE_UPPER_H   = 'H'.ord.to_u8
+    BYTE_UPPER_M   = 'M'.ord.to_u8
+    BYTE_UPPER_O   = 'O'.ord.to_u8
+    BYTE_UPPER_P   = 'P'.ord.to_u8
+    BYTE_UPPER_Q   = 'Q'.ord.to_u8
+    BYTE_UPPER_R   = 'R'.ord.to_u8
+    BYTE_UPPER_S   = 'S'.ord.to_u8
+    BYTE_UPPER_Z   = 'Z'.ord.to_u8
+    BYTE_LOWER_M   = 'm'.ord.to_u8
+    BYTE_LOWER_U   = 'u'.ord.to_u8
+    BYTE_TILDE     = '~'.ord.to_u8
+    BYTE_BRACKET   = '['.ord.to_u8
+    BYTE_ESC       = 27_u8
 
-    PASTE_END = [BYTE_ESC, BYTE_BRACKET, '2'.ord.to_u8, '0'.ord.to_u8, '1'.ord.to_u8, BYTE_TILDE]
-    BURST_MIN_CHARS = 3
-    BURST_CHAR_INTERVAL = 8.milliseconds
+    PASTE_END            = [BYTE_ESC, BYTE_BRACKET, '2'.ord.to_u8, '0'.ord.to_u8, '1'.ord.to_u8, BYTE_TILDE]
+    BURST_MIN_CHARS      = 3
+    BURST_CHAR_INTERVAL  = 8.milliseconds
     BURST_ENTER_SUPPRESS = 120.milliseconds
 
     def initialize(@input_provider : InputProvider = StdinInputProvider.new)
       @buffer = [] of UInt8
-      @event_channel = Channel(Event).new(32)  # Buffered channel
+      @event_channel = Channel(Event).new(32) # Buffered channel
       @paste_buffer = [] of UInt8
       @pending_events = [] of Event
       @pending_burst = ""
       @burst_buffer = ""
     end
 
-    # Get/set the input provider (for testing)
     property input_provider : InputProvider
+
+    # Feed raw terminal bytes and drain complete events (tests and tooling).
+    def feed(data : String) : Array(Event)
+      events = [] of Event
+      data.each_byte do |byte|
+        @buffer << byte
+        while event = parse_buffer
+          events << event
+        end
+      end
+      events
+    end
 
     # Start the input reading fiber
     def start : Nil
@@ -161,23 +175,29 @@ module Tui
           return nil
         end
 
-        # Check if this could be a standalone ESC (next byte took too long)
-        # In event-driven mode, we process bytes as they arrive
-        # If second byte is not part of escape sequence, treat ESC as standalone
-        if @buffer[1] != BYTE_BRACKET && @buffer[1] != BYTE_UPPER_O
-          @buffer.shift  # Remove ESC
-          return KeyEvent.new(Key::Escape)
+        second = @buffer[1]
+        if second == BYTE_BRACKET || second == BYTE_UPPER_O
+          event = parse_escape_sequence
+          return handle_non_char_event(event) if event
+          return parse_paste_buffer if @paste_mode
+          return nil
         end
 
+        # ESC ESC: keep double-escape working (one Escape now, leftover ESC waits).
+        if second == BYTE_ESC
+          @buffer.shift
+          return handle_non_char_event(KeyEvent.new(Key::Escape))
+        end
+
+        # ESC + byte is Option/Alt+key in terminals that use Meta as ESC prefix.
         event = parse_escape_sequence
         return handle_non_char_event(event) if event
-        return parse_paste_buffer if @paste_mode
         return nil
       end
 
       # Regular character - need to decode UTF-8 properly
       char = decode_utf8_char
-      return nil unless char  # Need more bytes for multi-byte char
+      return nil unless char # Need more bytes for multi-byte char
       handle_char(char)
     end
 
@@ -208,6 +228,10 @@ module Tui
       if @burst_active
         append_to_burst(char, now)
         return nil
+      end
+
+      if letter = KeyEvent.mac_option_key(char)
+        return handle_non_char_event(KeyEvent.new(letter, Modifiers::Alt))
       end
 
       if @pending_burst.empty?
@@ -327,13 +351,13 @@ module Tui
 
       # Determine how many bytes this UTF-8 character needs
       byte_count = if first < 0x80
-                     1  # ASCII (0xxxxxxx)
+                     1 # ASCII (0xxxxxxx)
                    elsif first & 0xE0 == 0xC0
-                     2  # 2-byte sequence (110xxxxx)
+                     2 # 2-byte sequence (110xxxxx)
                    elsif first & 0xF0 == 0xE0
-                     3  # 3-byte sequence (1110xxxx)
+                     3 # 3-byte sequence (1110xxxx)
                    elsif first & 0xF8 == 0xF0
-                     4  # 4-byte sequence (11110xxx)
+                     4 # 4-byte sequence (11110xxx)
                    else
                      # Invalid UTF-8 start byte, consume and return replacement
                      @buffer.shift
@@ -364,9 +388,9 @@ module Tui
         parse_ss3_sequence
       else
         # Alt + key
-        @buffer.shift  # Remove ESC
+        @buffer.shift # Remove ESC
         char = @buffer.shift.unsafe_chr
-        return KeyEvent.new(char, Modifiers::Alt)  # Positional to call char_to_key constructor
+        return KeyEvent.new(char, Modifiers::Alt) # Positional to call char_to_key constructor
       end
     end
 
@@ -386,8 +410,8 @@ module Tui
           term_idx = i
           break
         end
-        # If it's not a digit, semicolon, or '<', it's invalid
-        unless (byte >= BYTE_0 && byte <= BYTE_9) || byte == BYTE_SEMICOLON || byte == BYTE_LESS_THAN
+        # Digits, separators, SGR '<', and kitty colon subfields are valid.
+        unless (byte >= BYTE_0 && byte <= BYTE_9) || byte == BYTE_SEMICOLON || byte == BYTE_LESS_THAN || byte == BYTE_COLON
           # Unknown byte in sequence - consume ESC [ and return nil
           @buffer.shift
           @buffer.shift
@@ -399,59 +423,88 @@ module Tui
       return nil if term_idx == -1
 
       # Now we have a complete sequence, consume it
-      @buffer.shift  # ESC
-      @buffer.shift  # [
+      @buffer.shift # ESC
+      @buffer.shift # [
 
       # Check for mouse event (SGR format: <button;x;y;M or m)
       if @buffer[0]? == BYTE_LESS_THAN
         return parse_sgr_mouse
       end
 
-      # Collect parameters and final byte
+      # Collect parameters and final byte. Kitty CSI u uses colon subfields:
+      #   CSI key:shifted:base ; modifiers:event-type ; text u
       params = [] of Int32
       current = 0
+      event_type = 1
+      skip_subfield = false
+      read_event_type = false
 
       while !@buffer.empty?
         byte = @buffer.shift
 
         if byte >= BYTE_0 && byte <= BYTE_9
-          current = current * 10 + (byte - BYTE_0).to_i32
+          digit = (byte - BYTE_0).to_i32
+          if read_event_type
+            event_type = event_type * 10 + digit
+          elsif skip_subfield
+            # Ignore shifted/base/text subfields; the first number is the key.
+          else
+            current = current * 10 + digit
+          end
+        elsif byte == BYTE_COLON
+          if params.size == 1 && !skip_subfield && !read_event_type
+            read_event_type = true
+            event_type = 0
+          else
+            skip_subfield = true
+            read_event_type = false
+          end
         elsif byte == BYTE_SEMICOLON
           params << current
           current = 0
-        elsif byte == BYTE_UPPER_A  # Up
+          skip_subfield = false
+          read_event_type = false
+        elsif byte == BYTE_UPPER_A # Up
           params << current
-          return KeyEvent.new(Key::Up, modifiers_from_params(params))
-        elsif byte == BYTE_UPPER_B  # Down
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::Up, modifiers_from_params(params)))
+        elsif byte == BYTE_UPPER_B # Down
           params << current
-          return KeyEvent.new(Key::Down, modifiers_from_params(params))
-        elsif byte == BYTE_UPPER_C  # Right
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::Down, modifiers_from_params(params)))
+        elsif byte == BYTE_UPPER_C # Right
           params << current
-          return KeyEvent.new(Key::Right, modifiers_from_params(params))
-        elsif byte == BYTE_UPPER_D  # Left
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::Right, modifiers_from_params(params)))
+        elsif byte == BYTE_UPPER_D # Left
           params << current
-          return KeyEvent.new(Key::Left, modifiers_from_params(params))
-        elsif byte == BYTE_UPPER_H  # Home
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::Left, modifiers_from_params(params)))
+        elsif byte == BYTE_UPPER_H # Home
           params << current
-          return KeyEvent.new(Key::Home, modifiers_from_params(params))
-        elsif byte == BYTE_UPPER_F  # End
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::Home, modifiers_from_params(params)))
+        elsif byte == BYTE_UPPER_F # End
           params << current
-          return KeyEvent.new(Key::End, modifiers_from_params(params))
-        elsif byte == BYTE_UPPER_P  # F1 (with modifiers, CSI format)
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::End, modifiers_from_params(params)))
+        elsif byte == BYTE_UPPER_P # F1 (with modifiers, CSI format)
           params << current
-          return KeyEvent.new(Key::F1, modifiers_from_params(params))
-        elsif byte == BYTE_UPPER_Q  # F2 (with modifiers, CSI format)
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::F1, modifiers_from_params(params)))
+        elsif byte == BYTE_UPPER_Q # F2 (with modifiers, CSI format)
           params << current
-          return KeyEvent.new(Key::F2, modifiers_from_params(params))
-        elsif byte == BYTE_UPPER_R  # F3 (with modifiers, CSI format)
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::F2, modifiers_from_params(params)))
+        elsif byte == BYTE_UPPER_R # F3 (with modifiers, CSI format)
           params << current
-          return KeyEvent.new(Key::F3, modifiers_from_params(params))
-        elsif byte == BYTE_UPPER_S  # F4 (with modifiers, CSI format)
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::F3, modifiers_from_params(params)))
+        elsif byte == BYTE_UPPER_S # F4 (with modifiers, CSI format)
           params << current
-          return KeyEvent.new(Key::F4, modifiers_from_params(params))
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::F4, modifiers_from_params(params)))
         elsif byte == BYTE_TILDE
           params << current
-          return parse_tilde_sequence(params)
+          return csi_event_unless_release(event_type, parse_tilde_sequence(params))
+        elsif byte == BYTE_LOWER_U
+          params << current
+          return csi_event_unless_release(event_type, parse_csi_u_sequence(params))
+        elsif byte == BYTE_UPPER_Z
+          params << current
+          mods = modifiers_from_params(params)
+          mods |= Modifiers::Shift
+          return csi_event_unless_release(event_type, KeyEvent.new(Key::Tab, mods, '\t'))
         elsif byte == BYTE_UPPER_M || byte == BYTE_LOWER_M
           # X10/normal mouse (not SGR)
           params << current
@@ -469,8 +522,8 @@ module Tui
     private def parse_ss3_sequence : Event?
       return nil if @buffer.size < 3
 
-      @buffer.shift  # ESC
-      @buffer.shift  # O
+      @buffer.shift # ESC
+      @buffer.shift # O
 
       byte = @buffer.shift
 
@@ -489,35 +542,98 @@ module Tui
     end
 
     private def parse_tilde_sequence(params : Array(Int32)) : Event?
-      key = case params[0]?
-            when 200
-              start_paste_mode
-              return nil
-            when 201
-              return nil
-            when 1  then Key::Home
-            when 2  then Key::Insert
-            when 3  then Key::Delete
-            when 4  then Key::End
-            when 5  then Key::PageUp
-            when 6  then Key::PageDown
-            when 15 then Key::F5
-            when 17 then Key::F6
-            when 18 then Key::F7
-            when 19 then Key::F8
-            when 20 then Key::F9
-            when 21 then Key::F10
-            when 23 then Key::F11
-            when 24 then Key::F12
-            else    return nil
-            end
+      first = params[0]?
+      mods = modifiers_from_param(params[1]?)
 
-      KeyEvent.new(key, modifiers_from_param(params[1]?))
+      case first
+      when 200
+        start_paste_mode
+        return nil
+      when 201
+        return nil
+      when 1
+        KeyEvent.new(Key::Home, mods)
+      when 2
+        KeyEvent.new(Key::Insert, mods)
+      when 3
+        KeyEvent.new(Key::Delete, mods)
+      when 4
+        KeyEvent.new(Key::End, mods)
+      when 5
+        KeyEvent.new(Key::PageUp, mods)
+      when 6
+        KeyEvent.new(Key::PageDown, mods)
+      when 13
+        # Some terminals encode Shift+Enter as CSI 13 ; modifier ~
+        KeyEvent.new(Key::Enter, mods, '\r')
+      when 15
+        KeyEvent.new(Key::F5, mods)
+      when 17
+        KeyEvent.new(Key::F6, mods)
+      when 18
+        KeyEvent.new(Key::F7, mods)
+      when 19
+        KeyEvent.new(Key::F8, mods)
+      when 20
+        KeyEvent.new(Key::F9, mods)
+      when 21
+        KeyEvent.new(Key::F10, mods)
+      when 23
+        KeyEvent.new(Key::F11, mods)
+      when 24
+        KeyEvent.new(Key::F12, mods)
+      when 27
+        # xterm modifyOtherKeys: CSI 27 ; modifier ; key ~
+        keycode = params[2]?
+        return nil unless keycode
+        key_event_from_codepoint(keycode, mods)
+      else
+        nil
+      end
+    end
+
+    private def parse_csi_u_sequence(params : Array(Int32)) : Event?
+      codepoint = params[0]?
+      return nil unless codepoint
+
+      mods = params.size >= 2 ? modifiers_from_param(params[1]) : Modifiers::None
+      key_event_from_codepoint(codepoint, mods)
+    end
+
+    private def key_event_from_codepoint(code : Int32, modifiers : Modifiers) : Event?
+      case code
+      when 9
+        KeyEvent.new(Key::Tab, modifiers, '\t')
+      when 10
+        KeyEvent.new(Key::Enter, modifiers, '\n')
+      when 13
+        KeyEvent.new(Key::Enter, modifiers, '\r')
+      when 27
+        KeyEvent.new(Key::Escape, modifiers, '\e')
+      when 8, 127
+        KeyEvent.new(Key::Backspace, modifiers)
+      when 32
+        KeyEvent.new(Key::Space, modifiers, ' ')
+      else
+        return nil if code < 0 || code > 0x10FFFF
+        return nil if code >= 0xD800 && code <= 0xDFFF
+
+        char = code.chr
+        if !modifiers.ctrl? && (letter = KeyEvent.mac_option_key(char))
+          return KeyEvent.new(letter, modifiers | Modifiers::Alt)
+        end
+        KeyEvent.new(char, modifiers)
+      end
+    end
+
+    private def csi_event_unless_release(event_type : Int32, event : Event?) : Event?
+      return nil if event_type == 3
+      event
     end
 
     # Parse SGR extended mouse format: <button;x;y;M (press) or m (release)
     private def parse_sgr_mouse : Event?
-      @buffer.shift  # Remove '<'
+      @buffer.shift # Remove '<'
 
       params = [] of Int32
       current = 0
@@ -530,10 +646,10 @@ module Tui
         elsif byte == BYTE_SEMICOLON
           params << current
           current = 0
-        elsif byte == BYTE_UPPER_M  # Press
+        elsif byte == BYTE_UPPER_M # Press
           params << current
           return create_mouse_event(params, pressed: true)
-        elsif byte == BYTE_LOWER_M  # Release
+        elsif byte == BYTE_LOWER_M # Release
           params << current
           return create_mouse_event(params, pressed: false)
         else
@@ -546,14 +662,14 @@ module Tui
 
     private def parse_x10_mouse(params : Array(Int32), pressed : Bool) : Event?
       # X10 mouse format - less precise than SGR
-      nil  # TODO: implement if needed
+      nil # TODO: implement if needed
     end
 
     private def create_mouse_event(params : Array(Int32), pressed : Bool) : MouseEvent?
       return nil if params.size < 3
 
       button_code = params[0]
-      x = params[1] - 1  # 1-indexed to 0-indexed
+      x = params[1] - 1 # 1-indexed to 0-indexed
       y = params[2] - 1
 
       # Decode button

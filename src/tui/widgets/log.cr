@@ -227,11 +227,32 @@ module Tui
     end
 
     def on_event(event : Event) : Bool
-      return false unless focused?
       return false if event.stopped?
 
       case event
+      when MouseEvent
+        if event.in_rect?(@rect)
+          if event.button.wheel_up?
+            @scroll_offset = Math.max(0, @scroll_offset - 3)
+            @auto_scroll = false
+            mark_dirty!
+            event.stop!
+            return true
+          elsif event.button.wheel_down?
+            max_offset = Math.max(0, @entries.size - visible_count)
+            @scroll_offset = Math.min(max_offset, @scroll_offset + 3)
+            @auto_scroll = @scroll_offset >= max_offset
+            mark_dirty!
+            event.stop!
+            return true
+          elsif event.action.press? && event.button.left?
+            focus unless focused?
+            event.stop!
+            return true
+          end
+        end
       when KeyEvent
+        return false unless focused?
         case
         when event.matches?("up"), event.matches?("k")
           @scroll_offset = Math.max(0, @scroll_offset - 1)
@@ -276,26 +297,9 @@ module Tui
           event.stop!
           return true
         end
-      when MouseEvent
-        if event.action.press? && event.in_rect?(@rect)
-          if event.button.wheel_up?
-            @scroll_offset = Math.max(0, @scroll_offset - 3)
-            @auto_scroll = false
-            mark_dirty!
-            event.stop!
-            return true
-          elsif event.button.wheel_down?
-            max_offset = Math.max(0, @entries.size - visible_count)
-            @scroll_offset = Math.min(max_offset, @scroll_offset + 3)
-            @auto_scroll = @scroll_offset >= max_offset
-            mark_dirty!
-            event.stop!
-            return true
-          end
-        end
       end
 
-      super
+      false
     end
 
     def min_size : {Int32, Int32}

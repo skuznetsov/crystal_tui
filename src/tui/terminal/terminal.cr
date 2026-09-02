@@ -13,11 +13,11 @@ module Tui::Terminal
 
   # Test characters for width calibration
   CALIBRATION_CHARS = [
-    '缺',  # CJK U+7F3A - common problematic character
-    '漢',  # CJK U+6F22
-    '⚠',   # Warning sign U+26A0
-    '→',   # Arrow U+2192
-    '★',   # Star U+2605
+    '缺', # CJK U+7F3A - common problematic character
+    '漢', # CJK U+6F22
+    '⚠', # Warning sign U+26A0
+    '→', # Arrow U+2192
+    '★', # Star U+2605
   ]
 
   # Initialize terminal for TUI mode
@@ -35,6 +35,10 @@ module Tui::Terminal
 
     # Enable bracketed paste
     STDOUT.print(ANSI.enable_bracketed_paste)
+
+    # Distinguish Shift+Enter / Option+key from Enter / letter when the
+    # terminal supports kitty CSI u or xterm modifyOtherKeys.
+    STDOUT.print(ANSI.enable_modified_keys)
 
     # Clear screen
     STDOUT.print(ANSI.clear)
@@ -56,6 +60,8 @@ module Tui::Terminal
 
     # Disable bracketed paste
     STDOUT.print(ANSI.disable_bracketed_paste)
+
+    STDOUT.print(ANSI.disable_modified_keys)
 
     # Show cursor
     STDOUT.print(ANSI.show_cursor)
@@ -90,11 +96,22 @@ module Tui::Terminal
 
   # Get terminal size
   def size : {Int32, Int32}
-    # Try ioctl first
-    ws = uninitialized LibC::Winsize
-    if LibC.ioctl(STDOUT.fd, LibC::TIOCGWINSZ, pointerof(ws)) == 0
-      return {ws.ws_col.to_i32, ws.ws_row.to_i32}
-    end
+    {% if flag?(:win32) %}
+      # Try the Windows console API first
+      info = uninitialized LibC::CONSOLE_SCREEN_BUFFER_INFO
+      handle = LibC.GetStdHandle(LibC::STD_OUTPUT_HANDLE)
+      if handle != LibC::INVALID_HANDLE_VALUE && LibC.GetConsoleScreenBufferInfo(handle, pointerof(info)) != 0
+        cols = (info.srWindow.right - info.srWindow.left + 1).to_i32
+        rows = (info.srWindow.bottom - info.srWindow.top + 1).to_i32
+        return {cols, rows} if cols > 0 && rows > 0
+      end
+    {% else %}
+      # Try ioctl first
+      ws = uninitialized LibC::Winsize
+      if LibC.ioctl(STDOUT.fd, LibC::TIOCGWINSZ, pointerof(ws)) == 0
+        return {ws.ws_col.to_i32, ws.ws_row.to_i32}
+      end
+    {% end %}
 
     # Fallback to environment variables
     cols = ENV["COLUMNS"]?.try(&.to_i32?) || 80
@@ -143,35 +160,100 @@ module Tui::Terminal
   end
 
   private def setup_signals : Nil
-    # Handle SIGWINCH for terminal resize - notify via channel
-    Signal::WINCH.trap do
-      select
-      when @@resize_channel.send(nil)
-      else
-        # Channel full, resize already pending
+    {% if flag?(:win32) %}
+      # Windows has no SIGWINCH equivalent; poll the console size instead.
+      start_resize_poller
+
+      # Signal::INT/TERM traps raise NotImplementedError on win32.
+      # Process.on_terminate is the portable replacement (backed by
+      # SetConsoleCtrlHandler) and covers both cases below.
+      Process.on_terminate do |reason|
+        if reason.interrupted?
+          @@sigint_pending = true
+        else
+          shutdown
+          exit(143)
+        end
+      end
+    {% else %}
+      # Handle SIGWINCH for terminal resize - notify via channel
+      Signal::WINCH.trap do
+        select
+        when @@resize_channel.send(nil)
+        else
+          # Channel full, resize already pending
+        end
+      end
+
+      # Handle SIGINT and SIGTERM for clean shutdown
+      Signal::INT.trap do
+        @@sigint_pending = true
+      end
+
+      Signal::TERM.trap do
+        shutdown
+        exit(143)
+      end
+    {% end %}
+  end
+
+  {% if flag?(:win32) %}
+    # Windows exposes no console-resize event; poll GetConsoleScreenBufferInfo
+    # periodically and feed changes into the same resize_channel the Unix
+    # WINCH trap uses.
+    private def start_resize_poller : Nil
+      spawn do
+        last_size = size
+        loop do
+          sleep 250.milliseconds
+          current = size
+          next if current == last_size
+          last_size = current
+          select
+          when @@resize_channel.send(nil)
+          else
+            # Channel full, resize already pending
+          end
+        end
       end
     end
-
-    # Handle SIGINT and SIGTERM for clean shutdown
-    Signal::INT.trap do
-      @@sigint_pending = true
-    end
-
-    Signal::TERM.trap do
-      shutdown
-      exit(143)
-    end
-  end
+  {% end %}
 end
 
-# C library bindings for terminal size
-lib LibC
-  struct Winsize
-    ws_row : UInt16
-    ws_col : UInt16
-    ws_xpixel : UInt16
-    ws_ypixel : UInt16
+{% if flag?(:win32) %}
+  # C library bindings for terminal size (Windows console API)
+  lib LibC
+    struct COORD
+      x : Int16
+      y : Int16
+    end
+
+    struct SMALL_RECT
+      left : Int16
+      top : Int16
+      right : Int16
+      bottom : Int16
+    end
+
+    struct CONSOLE_SCREEN_BUFFER_INFO
+      dwSize : COORD
+      dwCursorPosition : COORD
+      wAttributes : UInt16
+      srWindow : SMALL_RECT
+      dwMaximumWindowSize : COORD
+    end
+
+    fun GetConsoleScreenBufferInfo(hConsoleOutput : HANDLE, lpConsoleScreenBufferInfo : CONSOLE_SCREEN_BUFFER_INFO*) : BOOL
   end
+{% else %}
+  # C library bindings for terminal size
+  lib LibC
+    struct Winsize
+      ws_row : UInt16
+      ws_col : UInt16
+      ws_xpixel : UInt16
+      ws_ypixel : UInt16
+    end
 
   {% if flag?(:darwin) || flag?(:freebsd) %}
     TIOCGWINSZ = 0x40087468_u64
@@ -179,5 +261,6 @@ lib LibC
     TIOCGWINSZ = 0x5413_u64
   {% end %}
 
-  fun ioctl(fd : Int32, request : UInt64, ...) : Int32
-end
+    fun ioctl(fd : Int32, request : UInt64, ...) : Int32
+  end
+{% end %}
