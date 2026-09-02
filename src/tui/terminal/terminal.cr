@@ -255,11 +255,11 @@ end
       ws_ypixel : UInt16
     end
 
-    {% if flag?(:darwin) %}
-      TIOCGWINSZ = 0x40087468_u64
-    {% else %}
-      TIOCGWINSZ = 0x5413_u64
-    {% end %}
+  {% if flag?(:darwin) || flag?(:freebsd) %}
+    TIOCGWINSZ = 0x40087468_u64
+  {% else %}
+    TIOCGWINSZ = 0x5413_u64
+  {% end %}
 
     fun ioctl(fd : Int32, request : UInt64, ...) : Int32
   end
