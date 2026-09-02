@@ -72,6 +72,7 @@ module Tui
     @last_edit_kind : Symbol? = nil
     @recording_undo : Bool = true
     @saved_text : String = ""
+    @line_ending : String = "\n"
 
     UNDO_LIMIT = 100
 
@@ -255,12 +256,11 @@ module Tui
     end
 
     def text : String
-      @lines.join("\n")
+      @lines.join(@line_ending)
     end
 
     def text=(content : String) : Nil
-      @lines = content.lines
-      @lines = [""] if @lines.empty?
+      load_content(content)
       @cursor = Cursor.new
       @selection = nil
       @scroll_x = 0
@@ -274,8 +274,7 @@ module Tui
     def load_file(path : Path) : Bool
       begin
         content = File.read(path.to_s)
-        @lines = content.lines
-        @lines = [""] if @lines.empty?
+        load_content(content)
         @path = path
         @title = path.basename
         @cursor = Cursor.new
@@ -317,6 +316,22 @@ module Tui
       rescue
         false
       end
+    end
+
+    # Replace the complete document as a single undoable edit.
+    # This is intended for transformations such as replace-all and formatting.
+    def replace_text(content : String) : Bool
+      return false if content == text
+
+      begin_edit(nil)
+      line = @cursor.line
+      col = @cursor.col
+      load_content(content)
+      @cursor.line = line.clamp(0, @lines.size - 1)
+      @cursor.col = col.clamp(0, @lines[@cursor.line].size)
+      @selection = nil
+      text_changed
+      true
     end
 
     def can_undo? : Bool
@@ -754,8 +769,7 @@ module Tui
 
     private def restore_edit_state(state : EditState) : Nil
       @recording_undo = false
-      @lines = state.text.lines
-      @lines = [""] if @lines.empty?
+      load_content(state.text)
       @cursor.line = state.line.clamp(0, @lines.size - 1)
       @cursor.col = state.col.clamp(0, @lines[@cursor.line].size)
       @selection = nil
@@ -766,6 +780,24 @@ module Tui
       mark_dirty!
     ensure
       @recording_undo = true
+    end
+
+    private def load_content(content : String) : Nil
+      @line_ending = detect_line_ending(content)
+      @lines = content.split(@line_ending, remove_empty: false)
+      @lines = [""] if @lines.empty?
+    end
+
+    private def detect_line_ending(content : String) : String
+      crlf = content.index("\r\n")
+      lf = content.index('\n')
+      cr = content.index('\r')
+
+      candidates = [] of {Int32, String}
+      candidates << {crlf, "\r\n"} if crlf
+      candidates << {lf, "\n"} if lf && (crlf.nil? || lf != crlf)
+      candidates << {cr, "\r"} if cr && (crlf.nil? || cr != crlf)
+      candidates.min_by?(&.[0]).try(&.[1]) || @line_ending
     end
 
     private def update_selection_start : Nil
