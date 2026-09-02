@@ -53,6 +53,7 @@ module Tui
     property show_close_button : Bool = true
 
     # Callbacks
+    @on_before_tab_close : Proc(String, Bool)?
     @on_tab_close : Proc(String, Nil)?
     @on_tab_switch : Proc(String, Nil)?
 
@@ -129,6 +130,10 @@ module Tui
       @tabs[@active_tab]?.try(&.id)
     end
 
+    def on_before_tab_close(&block : String -> Bool) : Nil
+      @on_before_tab_close = block
+    end
+
     def on_tab_close(&block : String -> Nil) : Nil
       @on_tab_close = block
     end
@@ -140,6 +145,7 @@ module Tui
     def close_tab(id : String) : Bool
       index = @tabs.index { |t| t.id == id }
       return false unless index
+      return false if @on_before_tab_close.try { |callback| !callback.call(id) }
 
       tab = @tabs[index]
       if content = tab.content
