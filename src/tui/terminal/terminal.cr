@@ -13,11 +13,11 @@ module Tui::Terminal
 
   # Test characters for width calibration
   CALIBRATION_CHARS = [
-    '缺',  # CJK U+7F3A - common problematic character
-    '漢',  # CJK U+6F22
-    '⚠',   # Warning sign U+26A0
-    '→',   # Arrow U+2192
-    '★',   # Star U+2605
+    '缺', # CJK U+7F3A - common problematic character
+    '漢', # CJK U+6F22
+    '⚠', # Warning sign U+26A0
+    '→', # Arrow U+2192
+    '★', # Star U+2605
   ]
 
   # Initialize terminal for TUI mode
@@ -35,6 +35,10 @@ module Tui::Terminal
 
     # Enable bracketed paste
     STDOUT.print(ANSI.enable_bracketed_paste)
+
+    # Distinguish Shift+Enter / Option+key from Enter / letter when the
+    # terminal supports kitty CSI u or xterm modifyOtherKeys.
+    STDOUT.print(ANSI.enable_modified_keys)
 
     # Clear screen
     STDOUT.print(ANSI.clear)
@@ -56,6 +60,8 @@ module Tui::Terminal
 
     # Disable bracketed paste
     STDOUT.print(ANSI.disable_bracketed_paste)
+
+    STDOUT.print(ANSI.disable_modified_keys)
 
     # Show cursor
     STDOUT.print(ANSI.show_cursor)

@@ -46,6 +46,15 @@ module Tui
       end
     end
 
+    struct EditState
+      getter text : String
+      getter line : Int32
+      getter col : Int32
+
+      def initialize(@text : String, @line : Int32, @col : Int32)
+      end
+    end
+
     @lines : Array(String) = [""]
     @cursor : Cursor = Cursor.new
     @selection : Selection?
@@ -58,6 +67,13 @@ module Tui
     @collapsed_folds : Set(Int32) = Set(Int32).new
     @hidden_lines : Array(Bool) = [false]
     @fold_starts : Hash(Int32, FoldRange) = {} of Int32 => FoldRange
+    @undo_stack : Array(EditState) = [] of EditState
+    @redo_stack : Array(EditState) = [] of EditState
+    @last_edit_kind : Symbol? = nil
+    @recording_undo : Bool = true
+    @saved_text : String = ""
+
+    UNDO_LIMIT = 100
 
     # Style
     property text_fg : Color = Color.white
@@ -250,6 +266,7 @@ module Tui
       @scroll_x = 0
       @scroll_y = 0
       @modified = true
+      clear_undo_history
       clear_folds
       mark_dirty!
     end
@@ -266,12 +283,16 @@ module Tui
         @scroll_x = 0
         @scroll_y = 0
         @modified = false
+        @saved_text = text
+        clear_undo_history
         clear_folds
         mark_dirty!
         true
       rescue ex
         @lines = ["Error loading file:", ex.message || "Unknown error"]
         @modified = false
+        @saved_text = text
+        clear_undo_history
         clear_folds
         mark_dirty!
         false
@@ -289,6 +310,7 @@ module Tui
         @path = path
         @title = path.basename
         @modified = false
+        @saved_text = text
         @on_save.try &.call(path)
         mark_dirty!
         true
@@ -297,9 +319,42 @@ module Tui
       end
     end
 
+    def can_undo? : Bool
+      !@undo_stack.empty?
+    end
+
+    def can_redo? : Bool
+      !@redo_stack.empty?
+    end
+
+    def undo : Bool
+      return false if @undo_stack.empty?
+
+      @redo_stack << current_edit_state
+      state = @undo_stack.pop
+      @last_edit_kind = nil
+      restore_edit_state(state)
+      true
+    end
+
+    def redo : Bool
+      return false if @redo_stack.empty?
+
+      @undo_stack << current_edit_state
+      state = @redo_stack.pop
+      @last_edit_kind = nil
+      restore_edit_state(state)
+      true
+    end
+
     # Editing operations
-    def insert_char(char : Char) : Nil
-      delete_selection if @selection
+    def insert_char(char : Char, record_undo : Bool = true) : Nil
+      has_sel = selection_active?
+      if record_undo
+        begin_edit(has_sel ? nil : :insert)
+        @last_edit_kind = :insert if has_sel
+      end
+      delete_selection(false) if @selection
       line = @lines[@cursor.line]
       @lines[@cursor.line] = line[0, @cursor.col] + char + line[@cursor.col..]
       @cursor.col += 1
@@ -307,12 +362,16 @@ module Tui
     end
 
     def insert_text(text : String) : Nil
-      delete_selection if @selection
-      text.each_char { |c| insert_char(c) }
+      return if text.empty? && @selection.nil?
+
+      begin_edit(nil)
+      delete_selection(false) if @selection
+      text.each_char { |c| insert_char(c, false) }
     end
 
     def insert_newline : Nil
-      delete_selection if @selection
+      begin_edit(selection_active? ? nil : :newline)
+      delete_selection(false) if @selection
       line = @lines[@cursor.line]
       @lines[@cursor.line] = line[0, @cursor.col]
       @lines.insert(@cursor.line + 1, line[@cursor.col..])
@@ -322,11 +381,14 @@ module Tui
     end
 
     def backspace : Nil
-      if @selection && !@selection.not_nil!.empty?
+      if selection_active?
         delete_selection
         return
       end
 
+      return if @cursor.line == 0 && @cursor.col == 0
+
+      begin_edit(:backspace)
       if @cursor.col > 0
         line = @lines[@cursor.line]
         @lines[@cursor.line] = line[0, @cursor.col - 1] + line[@cursor.col..]
@@ -344,12 +406,15 @@ module Tui
     end
 
     def delete : Nil
-      if @selection && !@selection.not_nil!.empty?
+      if selection_active?
         delete_selection
         return
       end
 
       line = @lines[@cursor.line]
+      return if @cursor.col >= line.size && @cursor.line >= @lines.size - 1
+
+      begin_edit(:delete)
       if @cursor.col < line.size
         @lines[@cursor.line] = line[0, @cursor.col] + line[@cursor.col + 1..]
         text_changed
@@ -361,10 +426,11 @@ module Tui
       end
     end
 
-    def delete_selection : Nil
+    def delete_selection(record_undo : Bool = true) : Nil
       sel = @selection
       return unless sel
 
+      begin_edit(nil) if record_undo
       sel = sel.normalize
       if sel.start_line == sel.end_line
         line = @lines[sel.start_line]
@@ -387,6 +453,25 @@ module Tui
 
     def select_all : Nil
       @selection = Selection.new(0, 0, @lines.size - 1, @lines.last.size)
+      mark_dirty!
+    end
+
+    def select_range(start_line : Int32, start_col : Int32, end_line : Int32, end_col : Int32, *, cursor_at_end : Bool = true) : Nil
+      return if @lines.empty?
+
+      start_line = start_line.clamp(0, @lines.size - 1)
+      end_line = end_line.clamp(0, @lines.size - 1)
+      start_col = start_col.clamp(0, @lines[start_line].size)
+      end_col = end_col.clamp(0, @lines[end_line].size)
+      @selection = Selection.new(start_line, start_col, end_line, end_col)
+      if cursor_at_end
+        @cursor.line = end_line
+        @cursor.col = end_col
+      else
+        @cursor.line = start_line
+        @cursor.col = start_col
+      end
+      ensure_cursor_visible
       mark_dirty!
     end
 
@@ -414,9 +499,11 @@ module Tui
     end
 
     def paste(text : String) : Nil
-      delete_selection if @selection
-
       normalized = normalize_newlines(text)
+      return if normalized.empty? && @selection.nil?
+
+      begin_edit(nil)
+      delete_selection(false) if @selection
       return if normalized.empty?
 
       normalized.each_char do |char|
@@ -633,6 +720,52 @@ module Tui
       @on_change.try &.call
       ensure_cursor_visible
       mark_dirty!
+    end
+
+    private def selection_active? : Bool
+      if sel = @selection
+        !sel.empty?
+      else
+        false
+      end
+    end
+
+    private def current_edit_state : EditState
+      EditState.new(text, @cursor.line, @cursor.col)
+    end
+
+    private def clear_undo_history : Nil
+      @undo_stack.clear
+      @redo_stack.clear
+      @last_edit_kind = nil
+    end
+
+    private def begin_edit(kind : Symbol?) : Nil
+      return unless @recording_undo
+      if kind && kind == @last_edit_kind && !@undo_stack.empty?
+        return
+      end
+
+      @undo_stack << current_edit_state
+      @undo_stack.shift if @undo_stack.size > UNDO_LIMIT
+      @redo_stack.clear
+      @last_edit_kind = kind
+    end
+
+    private def restore_edit_state(state : EditState) : Nil
+      @recording_undo = false
+      @lines = state.text.lines
+      @lines = [""] if @lines.empty?
+      @cursor.line = state.line.clamp(0, @lines.size - 1)
+      @cursor.col = state.col.clamp(0, @lines[@cursor.line].size)
+      @selection = nil
+      @modified = text != @saved_text
+      clear_folds if @fold_ranges.any?
+      @on_change.try &.call
+      ensure_cursor_visible
+      mark_dirty!
+    ensure
+      @recording_undo = true
     end
 
     private def update_selection_start : Nil
@@ -972,6 +1105,15 @@ module Tui
     end
 
     private def handle_key(event : KeyEvent) : Bool
+      if event.matches?("ctrl+shift+z") || event.matches?("ctrl+y")
+        redo
+        return true
+      end
+      if event.matches?("ctrl+z")
+        undo
+        return true
+      end
+
       shift = event.modifiers.shift?
       ctrl = event.modifiers.ctrl?
       alt = event.modifiers.alt?
@@ -1045,9 +1187,9 @@ module Tui
           end
         end
 
-        # Regular character input
+        # Regular character input. Alt/Ctrl/Meta chords are shortcuts, not text.
         if char = event.char
-          if char.printable?
+          if char.printable? && !ctrl && !alt && !event.meta?
             insert_char(char)
             return true
           end

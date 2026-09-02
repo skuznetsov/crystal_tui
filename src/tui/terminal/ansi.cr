@@ -62,9 +62,9 @@ module Tui::ANSI
   # Mouse support (SGR extended mode)
   def self.enable_mouse : String
     String.build do |s|
-      s << "#{CSI}?1000h"  # Basic mouse
-      s << "#{CSI}?1002h"  # Button event tracking
-      s << "#{CSI}?1006h"  # SGR extended mode
+      s << "#{CSI}?1000h" # Basic mouse
+      s << "#{CSI}?1002h" # Button event tracking
+      s << "#{CSI}?1006h" # SGR extended mode
     end
   end
 
@@ -85,6 +85,24 @@ module Tui::ANSI
     "#{CSI}?2004l"
   end
 
+  # Ask the terminal to encode modified special keys distinctly from the
+  # unmodified ones. Kitty/Ghostty use CSI u; xterm-family uses modifyOtherKeys.
+  # Level 1 avoids rewriting Ctrl+letter into CSI (those still arrive as C0).
+  def self.enable_modified_keys : String
+    String.build do |s|
+      # 1 = disambiguate, 4 = report alternate keys (Option as base letter + colon fields)
+      s << "#{CSI}>5u"
+      s << "#{CSI}>4;1m" # xterm modifyOtherKeys = 1
+    end
+  end
+
+  def self.disable_modified_keys : String
+    String.build do |s|
+      s << "#{CSI}<u"    # kitty pop keyboard protocol
+      s << "#{CSI}>4;0m" # xterm modifyOtherKeys off
+    end
+  end
+
   # Colors - 8 basic colors
   module Color
     BLACK   = 0
@@ -98,8 +116,8 @@ module Tui::ANSI
     DEFAULT = 9
 
     # Bright variants
-    BRIGHT_BLACK   = 8
-    BRIGHT_RED     = 9
+    BRIGHT_BLACK   =  8
+    BRIGHT_RED     =  9
     BRIGHT_GREEN   = 10
     BRIGHT_YELLOW  = 11
     BRIGHT_BLUE    = 12
@@ -178,7 +196,7 @@ module Tui::ANSI
     dim : Bool = false,
     italic : Bool = false,
     underline : Bool = false,
-    reverse : Bool = false
+    reverse : Bool = false,
   ) : String
     String.build do |s|
       s << self.bold if bold
