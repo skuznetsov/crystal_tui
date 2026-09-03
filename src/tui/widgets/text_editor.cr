@@ -72,6 +72,7 @@ module Tui
     @last_edit_kind : Symbol? = nil
     @recording_undo : Bool = true
     @saved_text : String = ""
+    @line_ending : String = "\n"
 
     UNDO_LIMIT = 100
 
@@ -255,12 +256,11 @@ module Tui
     end
 
     def text : String
-      @lines.join("\n")
+      @lines.join(@line_ending)
     end
 
     def text=(content : String) : Nil
-      @lines = content.lines
-      @lines = [""] if @lines.empty?
+      load_content(content)
       @cursor = Cursor.new
       @selection = nil
       @scroll_x = 0
@@ -274,8 +274,7 @@ module Tui
     def load_file(path : Path) : Bool
       begin
         content = File.read(path.to_s)
-        @lines = content.lines
-        @lines = [""] if @lines.empty?
+        load_content(content)
         @path = path
         @title = path.basename
         @cursor = Cursor.new
@@ -306,7 +305,7 @@ module Tui
 
     def save_as(path : Path) : Bool
       begin
-        File.write(path.to_s, text)
+        atomic_write(path, text)
         @path = path
         @title = path.basename
         @modified = false
@@ -317,6 +316,55 @@ module Tui
       rescue
         false
       end
+    end
+
+    private def atomic_write(path : Path, content : String) : Nil
+      target = if File.info?(path, follow_symlinks: false).try(&.symlink?)
+                 Path.new(File.realpath(path))
+               else
+                 path.expand
+               end
+      permissions = File.info?(target).try(&.permissions.to_i)
+      parent = target.parent
+      temporary = File.tempfile(".#{target.basename}.adamantine-", nil, dir: parent.to_s)
+      temporary_path = Path.new(temporary.path)
+      renamed = false
+
+      begin
+        temporary << content
+        temporary.flush
+        File.chmod(temporary_path, permissions) if permissions
+        temporary.fsync
+        temporary.close
+        File.rename(temporary_path, target)
+        renamed = true
+
+        begin
+          File.open(parent.to_s) { |directory| directory.fsync }
+        rescue
+          # Some platforms do not permit opening directories. The file itself
+          # is already durable and atomically visible at this point.
+        end
+      ensure
+        temporary.close unless temporary.closed?
+        File.delete(temporary_path) if !renamed && File.exists?(temporary_path)
+      end
+    end
+
+    # Replace the complete document as a single undoable edit.
+    # This is intended for transformations such as replace-all and formatting.
+    def replace_text(content : String) : Bool
+      return false if content == text
+
+      begin_edit(nil)
+      line = @cursor.line
+      col = @cursor.col
+      load_content(content)
+      @cursor.line = line.clamp(0, @lines.size - 1)
+      @cursor.col = col.clamp(0, @lines[@cursor.line].size)
+      @selection = nil
+      text_changed
+      true
     end
 
     def can_undo? : Bool
@@ -754,8 +802,7 @@ module Tui
 
     private def restore_edit_state(state : EditState) : Nil
       @recording_undo = false
-      @lines = state.text.lines
-      @lines = [""] if @lines.empty?
+      load_content(state.text)
       @cursor.line = state.line.clamp(0, @lines.size - 1)
       @cursor.col = state.col.clamp(0, @lines[@cursor.line].size)
       @selection = nil
@@ -766,6 +813,24 @@ module Tui
       mark_dirty!
     ensure
       @recording_undo = true
+    end
+
+    private def load_content(content : String) : Nil
+      @line_ending = detect_line_ending(content)
+      @lines = content.split(@line_ending, remove_empty: false)
+      @lines = [""] if @lines.empty?
+    end
+
+    private def detect_line_ending(content : String) : String
+      crlf = content.index("\r\n")
+      lf = content.index('\n')
+      cr = content.index('\r')
+
+      candidates = [] of {Int32, String}
+      candidates << {crlf, "\r\n"} if crlf
+      candidates << {lf, "\n"} if lf && (crlf.nil? || lf != crlf)
+      candidates << {cr, "\r"} if cr && (crlf.nil? || cr != crlf)
+      candidates.min_by?(&.[0]).try(&.[1]) || @line_ending
     end
 
     private def update_selection_start : Nil
