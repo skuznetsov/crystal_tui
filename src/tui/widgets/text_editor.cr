@@ -325,6 +325,11 @@ module Tui
       @buffer.text
     end
 
+    # Stream the current document bytes directly from the piece tree.
+    def write_to(io : IO) : Int32
+      @buffer.write_to(io)
+    end
+
     def text=(content : String) : Nil
       load_content(content)
       @cursor = Cursor.new
@@ -340,19 +345,7 @@ module Tui
     def load_file(path : Path) : Bool
       begin
         content = File.read(path.to_s)
-        load_content(content)
-        @path = path
-        @title = path.basename
-        @cursor = Cursor.new
-        @selection = nil
-        @scroll_x = 0
-        @scroll_y = 0
-        @modified = false
-        @saved_snapshot = @buffer.snapshot
-        @saved_line_ending = @line_ending
-        clear_undo_history
-        clear_folds
-        mark_dirty!
+        apply_content_as_saved(content, path, preserve_history: false, notify: false)
         true
       rescue ex
         load_content("Error loading file:\n#{ex.message || "Unknown error"}")
@@ -366,14 +359,72 @@ module Tui
       end
     end
 
+    # Load exact content as the saved baseline. By default this is an initial
+    # load and clears history; callers accepting an external revision should
+    # use `reload_as_saved`, which preserves the current structural root.
+    def load_content_as_saved(content : String, path : Path? = nil, *, preserve_history : Bool = false) : Bool
+      apply_content_as_saved(content, path, preserve_history: preserve_history, notify: true)
+    end
+
+    # Accept externally reloaded content as the clean baseline while retaining
+    # the current piece-tree root as one undoable history entry.
+    def reload_as_saved(content : String, path : Path? = nil) : Bool
+      load_content_as_saved(content, path, preserve_history: true)
+    end
+
+    # Accept the existing piece-tree root as the saved baseline. This is used
+    # when an independently validated disk revision has identical bytes, so a
+    # no-op reload does not create a dirty undo entry containing the same text.
+    def accept_current_as_saved(path : Path? = nil) : Bool
+      if path
+        @path = path
+        @title = path.basename
+      end
+      @modified = false
+      @saved_snapshot = @buffer.snapshot
+      @saved_line_ending = @line_ending
+      mark_dirty!
+      true
+    end
+
     def save : Bool
       return false unless path = @path
       save_as(path)
     end
 
+    # Save the active path after the caller approves the resolved target just
+    # before the temporary file is renamed into place.
+    def save_checked(&guard : Path -> Bool) : Bool
+      return false unless path = @path
+      save_as_checked(path, &guard)
+    end
+
+    # Save the active path with validation immediately before and after the
+    # atomic replacement. The editor becomes clean only after both predicates
+    # accept the resolved physical target.
+    def save_checked(before_rename : Proc(Path, Bool), after_rename : Proc(Path, Bool)) : Bool
+      return false unless path = @path
+      save_as_checked(path, before_rename, after_rename)
+    end
+
     def save_as(path : Path) : Bool
+      save_as_checked(path) { |_target| true }
+    end
+
+    # Save +path+ with a final, pre-rename predicate. A false predicate leaves
+    # the target and editor state untouched.
+    def save_as_checked(path : Path, &guard : Path -> Bool) : Bool
+      save_as_checked(path, guard, ->(_target : Path) { true })
+    end
+
+    # Save +path+ with predicates around the atomic replacement. A failed
+    # pre-rename predicate leaves the target untouched; a failed post-rename
+    # predicate leaves the editor dirty and suppresses the save callback.
+    def save_as_checked(path : Path, before_rename : Proc(Path, Bool), after_rename : Proc(Path, Bool)) : Bool
       begin
-        atomic_write(path) { |io| @buffer.write_to(io) }
+        target = atomic_write(path, before_rename) { |io| @buffer.write_to(io) }
+        return false unless target
+        return false unless after_rename.call(target)
         @path = path
         @title = path.basename
         @modified = false
@@ -387,7 +438,7 @@ module Tui
       end
     end
 
-    private def atomic_write(path : Path, & : IO ->) : Nil
+    private def atomic_write(path : Path, guard : Proc(Path, Bool), & : IO ->) : Path?
       target = if File.info?(path, follow_symlinks: false).try(&.symlink?)
                  Path.new(File.realpath(path))
                else
@@ -405,6 +456,7 @@ module Tui
         File.chmod(temporary_path, permissions) if permissions
         temporary.fsync
         temporary.close
+        return nil unless guard.call(target)
         File.rename(temporary_path, target)
         renamed = true
 
@@ -414,6 +466,7 @@ module Tui
           # Some platforms do not permit opening directories. The file itself
           # is already durable and atomically visible at this point.
         end
+        target
       ensure
         temporary.close unless temporary.closed?
         File.delete(temporary_path) if !renamed && File.exists?(temporary_path)
@@ -889,6 +942,48 @@ module Tui
     private def load_content(content : String) : Nil
       @line_ending = detect_line_ending(content)
       @buffer.reset(content)
+    end
+
+    private def apply_content_as_saved(content : String, path : Path?, *, preserve_history : Bool, notify : Bool) : Bool
+      raise ArgumentError.new("buffer text must be valid UTF-8") unless content.valid_encoding?
+
+      if preserve_history
+        old_line = @cursor.line
+        old_col = @cursor.col
+        # External revisions can contain megabytes of new source bytes. Keep
+        # exactly the current editor root as OURS so repeated reloads cannot
+        # retain an unbounded chain of complete external revisions.
+        clear_undo_history
+        begin_edit(nil)
+        @line_ending = detect_line_ending(content)
+        @buffer.replace_all(content)
+        @cursor.line = old_line.clamp(0, line_count - 1)
+        @cursor.col = old_col.clamp(0, line_length(@cursor.line))
+        @selection = nil
+      else
+        load_content(content)
+        @cursor = Cursor.new
+        @selection = nil
+        @scroll_x = 0
+        @scroll_y = 0
+        clear_undo_history
+      end
+
+      if path
+        @path = path
+        @title = path.basename
+      end
+      @modified = false
+      @saved_snapshot = @buffer.snapshot
+      @saved_line_ending = @line_ending
+      clear_folds
+      ensure_cursor_visible
+      if notify
+        notify_text_change(TextChange.full)
+      else
+        mark_dirty!
+      end
+      true
     end
 
     # TextEditor cursor columns are character indexes while PieceTreeBuffer
