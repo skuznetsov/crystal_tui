@@ -47,15 +47,35 @@ module Tui
     end
 
     struct EditState
-      getter text : String
+      getter snapshot : PieceTreeBuffer::Snapshot?
       getter line : Int32
       getter col : Int32
+      getter line_ending : String
+      @legacy_text : String?
 
-      def initialize(@text : String, @line : Int32, @col : Int32)
+      def initialize(snapshot : PieceTreeBuffer::Snapshot, @line : Int32, @col : Int32, @line_ending : String)
+        @snapshot = snapshot
+        @legacy_text = nil
+      end
+
+      # Compatibility constructor for callers that used EditState directly.
+      # TextEditor-created history entries always use structural snapshots.
+      def initialize(text : String, @line : Int32, @col : Int32)
+        @snapshot = nil
+        @line_ending = "\n"
+        @legacy_text = text
+      end
+
+      # Preserve the historical EditState API without retaining a duplicate
+      # document string in each undo entry.
+      def text : String
+        @legacy_text || @snapshot.not_nil!.text
       end
     end
 
-    @lines : Array(String) = [""]
+    @buffer : PieceTreeBuffer
+    @saved_snapshot : PieceTreeBuffer::Snapshot
+    @saved_line_ending : String = "\n"
     @cursor : Cursor = Cursor.new
     @selection : Selection?
     @scroll_x : Int32 = 0
@@ -71,7 +91,6 @@ module Tui
     @redo_stack : Array(EditState) = [] of EditState
     @last_edit_kind : Symbol? = nil
     @recording_undo : Bool = true
-    @saved_text : String = ""
     @line_ending : String = "\n"
 
     UNDO_LIMIT = 100
@@ -104,6 +123,8 @@ module Tui
 
     def initialize(id : String? = nil)
       super(id)
+      @buffer = PieceTreeBuffer.new
+      @saved_snapshot = @buffer.snapshot
       @focusable = true
       @v_scrollbar = ScrollBar.new(id ? "#{id}:v-scroll" : "text-editor:v-scroll", ScrollBar::Orientation::Vertical)
       @v_scrollbar.show_arrows = false
@@ -191,8 +212,8 @@ module Tui
     # True when `col` lands on the `{...}` after a collapsed header; expands the fold.
     def expand_fold_at_placeholder?(line : Int32, col : Int32) : Bool
       return false unless fold_placeholder_at(line)
-      return false if line < 0 || line >= @lines.size
-      start = @lines[line].size
+      return false if line < 0 || line >= line_count
+      start = line_length(line)
       return false unless col >= start && col < start + FOLD_PLACEHOLDER.size
       toggle_fold_at(line)
     end
@@ -207,7 +228,7 @@ module Tui
     end
 
     def scroll_view_by(lines : Int32) : Nil
-      return if lines == 0 || @lines.empty?
+      return if lines == 0 || line_count == 0
 
       offset = visible_index_of(@scroll_y) + lines
       apply_scrollbar_offset(offset)
@@ -229,8 +250,9 @@ module Tui
       @path
     end
 
+    # Returns a materialized snapshot. Mutate the editor through its edit API.
     def lines : Array(String)
-      @lines
+      Array.new(line_count) { |index| line_at(index) }
     end
 
     def cursor : Cursor
@@ -246,17 +268,17 @@ module Tui
     end
 
     def set_cursor(line : Int32, col : Int32) : Nil
-      return if @lines.empty?
+      return if line_count == 0
 
-      @cursor.line = line.clamp(0, @lines.size - 1)
-      @cursor.col = col.clamp(0, @lines[@cursor.line].size)
+      @cursor.line = line.clamp(0, line_count - 1)
+      @cursor.col = col.clamp(0, line_length(@cursor.line))
       @selection = nil
       ensure_cursor_visible
       mark_dirty!
     end
 
     def text : String
-      @lines.join(@line_ending)
+      @buffer.text
     end
 
     def text=(content : String) : Nil
@@ -282,15 +304,17 @@ module Tui
         @scroll_x = 0
         @scroll_y = 0
         @modified = false
-        @saved_text = text
+        @saved_snapshot = @buffer.snapshot
+        @saved_line_ending = @line_ending
         clear_undo_history
         clear_folds
         mark_dirty!
         true
       rescue ex
-        @lines = ["Error loading file:", ex.message || "Unknown error"]
+        load_content("Error loading file:\n#{ex.message || "Unknown error"}")
         @modified = false
-        @saved_text = text
+        @saved_snapshot = @buffer.snapshot
+        @saved_line_ending = @line_ending
         clear_undo_history
         clear_folds
         mark_dirty!
@@ -305,11 +329,12 @@ module Tui
 
     def save_as(path : Path) : Bool
       begin
-        atomic_write(path, text)
+        atomic_write(path) { |io| @buffer.write_to(io) }
         @path = path
         @title = path.basename
         @modified = false
-        @saved_text = text
+        @saved_snapshot = @buffer.snapshot
+        @saved_line_ending = @line_ending
         @on_save.try &.call(path)
         mark_dirty!
         true
@@ -318,7 +343,7 @@ module Tui
       end
     end
 
-    private def atomic_write(path : Path, content : String) : Nil
+    private def atomic_write(path : Path, & : IO ->) : Nil
       target = if File.info?(path, follow_symlinks: false).try(&.symlink?)
                  Path.new(File.realpath(path))
                else
@@ -331,7 +356,7 @@ module Tui
       renamed = false
 
       begin
-        temporary << content
+        yield temporary
         temporary.flush
         File.chmod(temporary_path, permissions) if permissions
         temporary.fsync
@@ -359,9 +384,10 @@ module Tui
       begin_edit(nil)
       line = @cursor.line
       col = @cursor.col
-      load_content(content)
-      @cursor.line = line.clamp(0, @lines.size - 1)
-      @cursor.col = col.clamp(0, @lines[@cursor.line].size)
+      @line_ending = detect_line_ending(content)
+      @buffer.replace_all(content)
+      @cursor.line = line.clamp(0, line_count - 1)
+      @cursor.col = col.clamp(0, line_length(@cursor.line))
       @selection = nil
       text_changed
       true
@@ -403,9 +429,11 @@ module Tui
         @last_edit_kind = :insert if has_sel
       end
       delete_selection(false) if @selection
-      line = @lines[@cursor.line]
-      @lines[@cursor.line] = line[0, @cursor.col] + char + line[@cursor.col..]
-      @cursor.col += 1
+      logical = normalize_newlines(char.to_s)
+      offset = byte_offset(@cursor.line, @cursor.col)
+      inserted = encode_newlines(logical, offset)
+      @buffer.insert(offset, inserted)
+      advance_cursor_by(logical)
       text_changed
     end
 
@@ -414,15 +442,20 @@ module Tui
 
       begin_edit(nil)
       delete_selection(false) if @selection
-      text.each_char { |c| insert_char(c, false) }
+      return if text.empty?
+
+      normalized = normalize_newlines(text)
+      offset = byte_offset(@cursor.line, @cursor.col)
+      @buffer.insert(offset, encode_newlines(normalized, offset))
+      advance_cursor_by(normalized)
+      text_changed
     end
 
     def insert_newline : Nil
       begin_edit(selection_active? ? nil : :newline)
       delete_selection(false) if @selection
-      line = @lines[@cursor.line]
-      @lines[@cursor.line] = line[0, @cursor.col]
-      @lines.insert(@cursor.line + 1, line[@cursor.col..])
+      offset = byte_offset(@cursor.line, @cursor.col)
+      @buffer.insert(offset, encode_newlines("\n", offset))
       @cursor.line += 1
       @cursor.col = 0
       text_changed
@@ -438,15 +471,19 @@ module Tui
 
       begin_edit(:backspace)
       if @cursor.col > 0
-        line = @lines[@cursor.line]
-        @lines[@cursor.line] = line[0, @cursor.col - 1] + line[@cursor.col..]
+        char = @buffer.character_at(@cursor.line, @cursor.col - 1).not_nil!
+        length = char.bytesize
+        offset = byte_offset(@cursor.line, @cursor.col) - length
+        delete_buffer_range(offset, length)
         @cursor.col -= 1
         text_changed
       elsif @cursor.line > 0
         # Join with previous line
-        prev_len = @lines[@cursor.line - 1].size
-        @lines[@cursor.line - 1] += @lines[@cursor.line]
-        @lines.delete_at(@cursor.line)
+        prev_line = @cursor.line - 1
+        prev_len = line_length(prev_line)
+        offset = byte_offset(prev_line, prev_len)
+        finish = @buffer.line_start_offset(@cursor.line)
+        delete_buffer_range(offset, finish - offset)
         @cursor.line -= 1
         @cursor.col = prev_len
         text_changed
@@ -459,17 +496,20 @@ module Tui
         return
       end
 
-      line = @lines[@cursor.line]
-      return if @cursor.col >= line.size && @cursor.line >= @lines.size - 1
+      length = line_length(@cursor.line)
+      return if @cursor.col >= length && @cursor.line >= line_count - 1
 
       begin_edit(:delete)
-      if @cursor.col < line.size
-        @lines[@cursor.line] = line[0, @cursor.col] + line[@cursor.col + 1..]
+      if @cursor.col < length
+        char = @buffer.character_at(@cursor.line, @cursor.col).not_nil!
+        offset = byte_offset(@cursor.line, @cursor.col)
+        delete_buffer_range(offset, char.bytesize)
         text_changed
-      elsif @cursor.line < @lines.size - 1
+      elsif @cursor.line < line_count - 1
         # Join with next line
-        @lines[@cursor.line] += @lines[@cursor.line + 1]
-        @lines.delete_at(@cursor.line + 1)
+        offset = byte_offset(@cursor.line, length)
+        finish = @buffer.line_start_offset(@cursor.line + 1)
+        delete_buffer_range(offset, finish - offset)
         text_changed
       end
     end
@@ -480,18 +520,9 @@ module Tui
 
       begin_edit(nil) if record_undo
       sel = sel.normalize
-      if sel.start_line == sel.end_line
-        line = @lines[sel.start_line]
-        @lines[sel.start_line] = line[0, sel.start_col] + line[sel.end_col..]
-      else
-        # Delete across lines
-        first_part = @lines[sel.start_line][0, sel.start_col]
-        last_part = @lines[sel.end_line][sel.end_col..]
-        @lines[sel.start_line] = first_part + last_part
-        (sel.end_line - sel.start_line).times do
-          @lines.delete_at(sel.start_line + 1)
-        end
-      end
+      start_offset = byte_offset(sel.start_line, sel.start_col)
+      end_offset = byte_offset(sel.end_line, sel.end_col)
+      delete_buffer_range(start_offset, end_offset - start_offset)
 
       @cursor.line = sel.start_line
       @cursor.col = sel.start_col
@@ -500,17 +531,17 @@ module Tui
     end
 
     def select_all : Nil
-      @selection = Selection.new(0, 0, @lines.size - 1, @lines.last.size)
+      @selection = Selection.new(0, 0, line_count - 1, line_length(line_count - 1))
       mark_dirty!
     end
 
     def select_range(start_line : Int32, start_col : Int32, end_line : Int32, end_col : Int32, *, cursor_at_end : Bool = true) : Nil
-      return if @lines.empty?
+      return if line_count == 0
 
-      start_line = start_line.clamp(0, @lines.size - 1)
-      end_line = end_line.clamp(0, @lines.size - 1)
-      start_col = start_col.clamp(0, @lines[start_line].size)
-      end_col = end_col.clamp(0, @lines[end_line].size)
+      start_line = start_line.clamp(0, line_count - 1)
+      end_line = end_line.clamp(0, line_count - 1)
+      start_col = start_col.clamp(0, line_length(start_line))
+      end_col = end_col.clamp(0, line_length(end_line))
       @selection = Selection.new(start_line, start_col, end_line, end_col)
       if cursor_at_end
         @cursor.line = end_line
@@ -528,16 +559,9 @@ module Tui
       return nil unless sel
 
       sel = sel.normalize
-      if sel.start_line == sel.end_line
-        @lines[sel.start_line][sel.start_col...sel.end_col]
-      else
-        result = @lines[sel.start_line][sel.start_col..]
-        (sel.start_line + 1...sel.end_line).each do |i|
-          result += "\n" + @lines[i]
-        end
-        result += "\n" + @lines[sel.end_line][0, sel.end_col]
-        result
-      end
+      start_offset = byte_offset(sel.start_line, sel.start_col)
+      end_offset = byte_offset(sel.end_line, sel.end_col)
+      normalize_newlines(@buffer.slice(start_offset, end_offset - start_offset))
     end
 
     def cut : String?
@@ -554,19 +578,9 @@ module Tui
       delete_selection(false) if @selection
       return if normalized.empty?
 
-      normalized.each_char do |char|
-        if char == '\n'
-          line = @lines[@cursor.line]
-          @lines[@cursor.line] = line[0, @cursor.col]
-          @lines.insert(@cursor.line + 1, line[@cursor.col..])
-          @cursor.line += 1
-          @cursor.col = 0
-        else
-          line = @lines[@cursor.line]
-          @lines[@cursor.line] = line[0, @cursor.col] + char + line[@cursor.col..]
-          @cursor.col += 1
-        end
-      end
+      offset = byte_offset(@cursor.line, @cursor.col)
+      @buffer.insert(offset, encode_newlines(normalized, offset))
+      advance_cursor_by(normalized)
 
       text_changed
     end
@@ -584,7 +598,7 @@ module Tui
         @cursor.col -= 1
       elsif @cursor.line > 0
         @cursor.line -= 1
-        @cursor.col = @lines[@cursor.line].size
+        @cursor.col = line_length(@cursor.line)
       end
 
       update_selection_end if with_selection
@@ -596,9 +610,9 @@ module Tui
       update_selection_start if with_selection && !@selection
       clear_selection unless with_selection
 
-      if @cursor.col < @lines[@cursor.line].size
+      if @cursor.col < line_length(@cursor.line)
         @cursor.col += 1
-      elsif @cursor.line < @lines.size - 1
+      elsif @cursor.line < line_count - 1
         @cursor.line += 1
         @cursor.col = 0
       end
@@ -615,7 +629,7 @@ module Tui
       target = previous_visible_line(@cursor.line)
       if target
         @cursor.line = target
-        @cursor.col = @cursor.col.clamp(0, @lines[@cursor.line].size)
+        @cursor.col = @cursor.col.clamp(0, line_length(@cursor.line))
       end
 
       update_selection_end if with_selection
@@ -630,7 +644,7 @@ module Tui
       target = next_visible_line(@cursor.line)
       if target
         @cursor.line = target
-        @cursor.col = @cursor.col.clamp(0, @lines[@cursor.line].size)
+        @cursor.col = @cursor.col.clamp(0, line_length(@cursor.line))
       end
 
       update_selection_end if with_selection
@@ -644,17 +658,9 @@ module Tui
 
       if @cursor.col == 0 && @cursor.line > 0
         @cursor.line -= 1
-        @cursor.col = @lines[@cursor.line].size
+        @cursor.col = line_length(@cursor.line)
       else
-        line = @lines[@cursor.line]
-        # Skip whitespace
-        while @cursor.col > 0 && line[@cursor.col - 1].whitespace?
-          @cursor.col -= 1
-        end
-        # Skip word chars
-        while @cursor.col > 0 && !line[@cursor.col - 1].whitespace?
-          @cursor.col -= 1
-        end
+        @cursor.col = @buffer.previous_word_column(@cursor.line, @cursor.col)
       end
 
       update_selection_end if with_selection
@@ -666,19 +672,12 @@ module Tui
       update_selection_start if with_selection && !@selection
       clear_selection unless with_selection
 
-      line = @lines[@cursor.line]
-      if @cursor.col >= line.size && @cursor.line < @lines.size - 1
+      length = line_length(@cursor.line)
+      if @cursor.col >= length && @cursor.line < line_count - 1
         @cursor.line += 1
         @cursor.col = 0
       else
-        # Skip word chars
-        while @cursor.col < line.size && !line[@cursor.col].whitespace?
-          @cursor.col += 1
-        end
-        # Skip whitespace
-        while @cursor.col < line.size && line[@cursor.col].whitespace?
-          @cursor.col += 1
-        end
+        @cursor.col = @buffer.next_word_column(@cursor.line, @cursor.col)
       end
 
       update_selection_end if with_selection
@@ -701,7 +700,7 @@ module Tui
       update_selection_start if with_selection && !@selection
       clear_selection unless with_selection
 
-      @cursor.col = @lines[@cursor.line].size
+      @cursor.col = line_length(@cursor.line)
 
       update_selection_end if with_selection
       ensure_cursor_visible
@@ -717,8 +716,8 @@ module Tui
     end
 
     def move_to_end : Nil
-      @cursor.line = @lines.size - 1
-      @cursor.col = @lines.last.size
+      @cursor.line = line_count - 1
+      @cursor.col = line_length(@cursor.line)
       @selection = nil
       ensure_cursor_visible
       mark_dirty!
@@ -733,7 +732,7 @@ module Tui
         line = previous
       end
       @cursor.line = line
-      @cursor.col = @cursor.col.clamp(0, @lines[@cursor.line].size)
+      @cursor.col = @cursor.col.clamp(0, line_length(@cursor.line))
       @selection = nil
       ensure_cursor_visible
       mark_dirty!
@@ -748,14 +747,14 @@ module Tui
         line = following
       end
       @cursor.line = line
-      @cursor.col = @cursor.col.clamp(0, @lines[@cursor.line].size)
+      @cursor.col = @cursor.col.clamp(0, line_length(@cursor.line))
       @selection = nil
       ensure_cursor_visible
       mark_dirty!
     end
 
     def goto_line(line : Int32) : Nil
-      @cursor.line = (line - 1).clamp(0, @lines.size - 1)
+      @cursor.line = (line - 1).clamp(0, line_count - 1)
       @cursor.col = 0
       @selection = nil
       ensure_cursor_visible
@@ -779,7 +778,7 @@ module Tui
     end
 
     private def current_edit_state : EditState
-      EditState.new(text, @cursor.line, @cursor.col)
+      EditState.new(@buffer.snapshot, @cursor.line, @cursor.col, @line_ending)
     end
 
     private def clear_undo_history : Nil
@@ -802,11 +801,16 @@ module Tui
 
     private def restore_edit_state(state : EditState) : Nil
       @recording_undo = false
-      load_content(state.text)
-      @cursor.line = state.line.clamp(0, @lines.size - 1)
-      @cursor.col = state.col.clamp(0, @lines[@cursor.line].size)
+      if snapshot = state.snapshot
+        @buffer.restore(snapshot)
+        @line_ending = state.line_ending
+      else
+        load_content(state.text)
+      end
+      @cursor.line = state.line.clamp(0, line_count - 1)
+      @cursor.col = state.col.clamp(0, line_length(@cursor.line))
       @selection = nil
-      @modified = text != @saved_text
+      @modified = !saved_state?
       clear_folds if @fold_ranges.any?
       @on_change.try &.call
       ensure_cursor_visible
@@ -817,8 +821,72 @@ module Tui
 
     private def load_content(content : String) : Nil
       @line_ending = detect_line_ending(content)
-      @lines = content.split(@line_ending, remove_empty: false)
-      @lines = [""] if @lines.empty?
+      @buffer.reset(content)
+    end
+
+    # TextEditor cursor columns are character indexes while PieceTreeBuffer
+    # edit offsets are UTF-8 byte indexes. Keep that conversion in one place.
+    private def line_count : Int32
+      @buffer.line_count
+    end
+
+    private def line_at(index : Int32) : String
+      @buffer.line(index)
+    end
+
+    private def line_length(index : Int32) : Int32
+      @buffer.line_character_length(index)
+    end
+
+    private def byte_offset(line : Int32, col : Int32) : Int32
+      start = @buffer.line_start_offset(line)
+      @buffer.byte_offset_at_codepoint(@buffer.codepoint_index_at_offset(start) + col)
+    end
+
+    private def encode_newlines(content : String, offset : Int32) : String
+      return content unless content.includes?('\n')
+
+      ending = @line_ending
+      previous_is_cr = offset > 0 && @buffer.byte_at_offset(offset - 1) == '\r'.ord
+      next_is_lf = @buffer.byte_at_offset(offset) == '\n'.ord
+      if (content.starts_with?("\n") && ending.starts_with?("\n") && previous_is_cr) ||
+         (content.ends_with?("\n") && ending.ends_with?("\r") && next_is_lf)
+        ending = "\r\n"
+      end
+      content.gsub("\n", ending)
+    end
+
+    # Deleting content between a lone CR and a lone LF must not silently merge
+    # two untouched logical line endings into one CRLF sequence.
+    private def delete_buffer_range(offset : Int32, length : Int32) : String
+      finish = offset + length
+      joins_crlf = offset > 0 && finish < @buffer.byte_length &&
+                   @buffer.byte_at_offset(offset - 1) == '\r'.ord &&
+                   @buffer.byte_at_offset(finish) == '\n'.ord
+      if joins_crlf
+        deleted = @buffer.slice(offset, length)
+        @buffer.delete(offset, length + 1)
+        replacement = @line_ending == "\n" ? "\n\n" : "\r\n"
+        @buffer.insert(offset, replacement)
+        deleted
+      else
+        @buffer.delete(offset, length)
+      end
+    end
+
+    private def advance_cursor_by(content : String) : Nil
+      content.each_char do |char|
+        if char == '\n'
+          @cursor.line += 1
+          @cursor.col = 0
+        else
+          @cursor.col += 1
+        end
+      end
+    end
+
+    private def saved_state? : Bool
+      @line_ending == @saved_line_ending && @buffer.same_state?(@saved_snapshot)
     end
 
     private def detect_line_ending(content : String) : String
@@ -848,7 +916,7 @@ module Tui
     end
 
     private def line_number_width : Int32
-      @show_line_numbers ? (@lines.size.to_s.size + 1) : 0
+      @show_line_numbers ? (line_count.to_s.size + 1) : 0
     end
 
     private def fold_gutter_width : Int32
@@ -877,16 +945,20 @@ module Tui
     end
 
     private def visible_line_count : Int32
+      return line_count if @collapsed_folds.empty?
+
       count = 0
-      @lines.size.times do |line|
+      line_count.times do |line|
         count += 1 unless line_hidden?(line)
       end
       count
     end
 
     private def visible_index_of(doc_line : Int32) : Int32
+      return doc_line.clamp(0, line_count) if @collapsed_folds.empty?
+
       index = 0
-      limit = doc_line.clamp(0, @lines.size)
+      limit = doc_line.clamp(0, line_count)
       limit.times do |line|
         index += 1 unless line_hidden?(line)
       end
@@ -894,10 +966,12 @@ module Tui
     end
 
     private def document_line_at_visible_index(visible_index : Int32) : Int32
-      return 0 if @lines.empty?
+      return 0 if line_count == 0
+      return visible_index.clamp(0, line_count - 1) if @collapsed_folds.empty?
+
       index = 0
       last_visible = 0
-      @lines.size.times do |line|
+      line_count.times do |line|
         next if line_hidden?(line)
         last_visible = line
         return line if index == visible_index
@@ -923,7 +997,7 @@ module Tui
     end
 
     private def rebuild_hidden_lines! : Nil
-      @hidden_lines = Array.new(@lines.size, false)
+      @hidden_lines = Array.new(line_count, false)
       @collapsed_folds.each do |start_line|
         range = @fold_starts[start_line]?
         next unless range
@@ -950,7 +1024,7 @@ module Tui
 
     private def next_visible_line(from : Int32) : Int32?
       line = from + 1
-      while line < @lines.size
+      while line < line_count
         return line unless line_hidden?(line)
         line += 1
       end
@@ -967,7 +1041,7 @@ module Tui
     end
 
     private def first_visible_from(from : Int32) : Int32
-      line = from.clamp(0, Math.max(@lines.size - 1, 0))
+      line = from.clamp(0, Math.max(line_count - 1, 0))
       return line unless line_hidden?(line)
       next_visible_line(line - 1) || previous_visible_line(line + 1) || 0
     end
@@ -986,7 +1060,7 @@ module Tui
 
     private def ensure_cursor_visible : Nil
       reveal_cursor_line!
-      return if @lines.empty?
+      return if line_count == 0
 
       # Vertical scrolling in document-line space, skipping hidden lines for height.
       if @cursor.line < @scroll_y || line_hidden?(@scroll_y)
@@ -1045,7 +1119,7 @@ module Tui
       visible_rows.times do |row|
         y = @rect.y + row
 
-        if doc_line >= @lines.size
+        if doc_line >= line_count
           @rect.width.times do |x|
             buffer.set(@rect.x + x, y, ' ', text_style) if clip.contains?(@rect.x + x, y)
           end
@@ -1069,10 +1143,15 @@ module Tui
           end
         end
 
-        line = @lines[doc_line]
+        full_length = line_length(doc_line)
+        visible_line = if @scroll_x <= full_length
+                         @buffer.line_slice(doc_line, @scroll_x, content_width)
+                       else
+                         ""
+                       end
         content_x = @rect.x + gutter_width
         placeholder = fold_placeholder_at(doc_line)
-        placeholder_start = line.size
+        placeholder_start = full_length
         line_placeholder_style = is_current_line && focused? ? Style.new(fg: @fold_placeholder_fg, bg: @current_line_bg) : placeholder_style
 
         content_width.times do |col|
@@ -1091,8 +1170,8 @@ module Tui
 
           char = if in_placeholder
                    placeholder_char
-                 elsif text_col < line.size
-                   c = line[text_col]
+                 elsif text_col < full_length
+                   c = visible_line[col]
                    c == '\t' ? ' ' : c
                  else
                    ' '
@@ -1296,11 +1375,11 @@ module Tui
         end
 
         text_x = rel_x - gutter_width + @scroll_x
-        if doc_line < @lines.size
+        if doc_line < line_count
           # iTerm2 SGR mouse reliably reports Shift; Ctrl is intercepted and
           # Option often does not set the Alt bit. Middle-click has no modifier.
           if hyperclick_mouse?(event)
-            col = text_x.clamp(0, @lines[doc_line].size)
+            col = text_x.clamp(0, line_length(doc_line))
             @cursor.line = doc_line
             @cursor.col = col
             @selection = nil
@@ -1313,7 +1392,7 @@ module Tui
             return true
           end
           @cursor.line = doc_line
-          @cursor.col = text_x.clamp(0, @lines[doc_line].size)
+          @cursor.col = text_x.clamp(0, line_length(doc_line))
           @selection = nil
           mark_dirty!
         end
@@ -1322,14 +1401,14 @@ module Tui
         focus unless focused?
         rel_x, rel_y = event.relative_to(@rect)
         text_x = rel_x - gutter_width + @scroll_x
-        text_y = document_line_at_visual_row(rel_y).clamp(0, @lines.size - 1)
+        text_y = document_line_at_visual_row(rel_y).clamp(0, line_count - 1)
 
         unless @selection
           @selection = Selection.new(@cursor.line, @cursor.col, @cursor.line, @cursor.col)
         end
 
         @cursor.line = text_y
-        @cursor.col = text_x.clamp(0, @lines[text_y].size)
+        @cursor.col = text_x.clamp(0, line_length(text_y))
         update_selection_end
 
         mark_dirty!
