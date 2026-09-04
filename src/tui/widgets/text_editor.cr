@@ -33,6 +33,45 @@ module Tui
       end
     end
 
+    # A position in both the editor's public character coordinates and UTF-16
+    # coordinates suitable for protocol boundaries such as LSP.
+    struct TextPosition
+      getter line : Int32
+      getter column : Int32
+      getter utf16_column : Int32
+
+      def initialize(@line : Int32, @column : Int32, @utf16_column : Int32)
+      end
+    end
+
+    # Describes one logical mutation. Incremental ranges refer to the document
+    # before the mutation and +text+ is the exact replacement stored afterward.
+    # Full changes deliberately omit text so consumers materialize it only when
+    # their compatibility boundary requires a complete document.
+    struct TextChange
+      getter start : TextPosition?
+      getter finish : TextPosition?
+      getter text : String
+
+      def initialize(@start : TextPosition, @finish : TextPosition, @text : String)
+      end
+
+      private def initialize(@start : Nil, @finish : Nil, @text : String)
+      end
+
+      def self.full : TextChange
+        new(nil, nil, "")
+      end
+
+      def incremental? : Bool
+        !@start.nil?
+      end
+
+      def full? : Bool
+        !incremental?
+      end
+    end
+
     # LSP-style fold: start_line stays visible; start_line+1..end_line hide when collapsed.
     struct FoldRange
       property start_line : Int32
@@ -116,6 +155,7 @@ module Tui
 
     # Callbacks
     @on_change : Proc(Nil)?
+    @on_text_change : Proc(TextChange, Nil)?
     @on_save : Proc(Path, Nil)?
     @on_cell_style : Proc(Int32, Int32, Char, Style, Style)?
     @on_hyperclick : Proc(Int32, Int32, Modifiers, Nil)?
@@ -133,6 +173,10 @@ module Tui
 
     def on_change(&block : -> Nil) : Nil
       @on_change = block
+    end
+
+    def on_text_change(&block : TextChange -> Nil) : Nil
+      @on_text_change = block
     end
 
     def on_save(&block : Path -> Nil) : Nil
@@ -389,7 +433,7 @@ module Tui
       @cursor.line = line.clamp(0, line_count - 1)
       @cursor.col = col.clamp(0, line_length(@cursor.line))
       @selection = nil
-      text_changed
+      text_changed(TextChange.full)
       true
     end
 
@@ -428,37 +472,51 @@ module Tui
         begin_edit(has_sel ? nil : :insert)
         @last_edit_kind = :insert if has_sel
       end
-      delete_selection(false) if @selection
+      selection_change = delete_selection_content(false) if @selection
+      start_position = selection_change.try(&.[0]) || current_text_position
+      finish_position = selection_change.try(&.[1]) || start_position
+      exact = selection_change.try(&.[2]) != false
       logical = normalize_newlines(char.to_s)
       offset = byte_offset(@cursor.line, @cursor.col)
       inserted = encode_newlines(logical, offset)
       @buffer.insert(offset, inserted)
       advance_cursor_by(logical)
-      text_changed
+      text_changed(exact ? TextChange.new(start_position, finish_position, inserted) : TextChange.full)
     end
 
     def insert_text(text : String) : Nil
       return if text.empty? && @selection.nil?
 
       begin_edit(nil)
-      delete_selection(false) if @selection
-      return if text.empty?
+      selection_change = delete_selection_content(false) if @selection
+      start_position = selection_change.try(&.[0]) || current_text_position
+      finish_position = selection_change.try(&.[1]) || start_position
+      exact = selection_change.try(&.[2]) != false
+      if text.empty?
+        text_changed(exact ? TextChange.new(start_position, finish_position, "") : TextChange.full)
+        return
+      end
 
       normalized = normalize_newlines(text)
       offset = byte_offset(@cursor.line, @cursor.col)
-      @buffer.insert(offset, encode_newlines(normalized, offset))
+      inserted = encode_newlines(normalized, offset)
+      @buffer.insert(offset, inserted)
       advance_cursor_by(normalized)
-      text_changed
+      text_changed(exact ? TextChange.new(start_position, finish_position, inserted) : TextChange.full)
     end
 
     def insert_newline : Nil
       begin_edit(selection_active? ? nil : :newline)
-      delete_selection(false) if @selection
+      selection_change = delete_selection_content(false) if @selection
+      start_position = selection_change.try(&.[0]) || current_text_position
+      finish_position = selection_change.try(&.[1]) || start_position
+      exact = selection_change.try(&.[2]) != false
       offset = byte_offset(@cursor.line, @cursor.col)
-      @buffer.insert(offset, encode_newlines("\n", offset))
+      inserted = encode_newlines("\n", offset)
+      @buffer.insert(offset, inserted)
       @cursor.line += 1
       @cursor.col = 0
-      text_changed
+      text_changed(exact ? TextChange.new(start_position, finish_position, inserted) : TextChange.full)
     end
 
     def backspace : Nil
@@ -471,22 +529,26 @@ module Tui
 
       begin_edit(:backspace)
       if @cursor.col > 0
+        finish_position = current_text_position
+        start_position = text_position(@cursor.line, @cursor.col - 1)
         char = @buffer.character_at(@cursor.line, @cursor.col - 1).not_nil!
         length = char.bytesize
         offset = byte_offset(@cursor.line, @cursor.col) - length
-        delete_buffer_range(offset, length)
+        exact = delete_buffer_range(offset, length)
         @cursor.col -= 1
-        text_changed
+        text_changed(exact ? TextChange.new(start_position, finish_position, "") : TextChange.full)
       elsif @cursor.line > 0
         # Join with previous line
+        finish_position = current_text_position
         prev_line = @cursor.line - 1
         prev_len = line_length(prev_line)
+        start_position = text_position(prev_line, prev_len)
         offset = byte_offset(prev_line, prev_len)
         finish = @buffer.line_start_offset(@cursor.line)
-        delete_buffer_range(offset, finish - offset)
+        exact = delete_buffer_range(offset, finish - offset)
         @cursor.line -= 1
         @cursor.col = prev_len
-        text_changed
+        text_changed(exact ? TextChange.new(start_position, finish_position, "") : TextChange.full)
       end
     end
 
@@ -501,33 +563,28 @@ module Tui
 
       begin_edit(:delete)
       if @cursor.col < length
+        start_position = current_text_position
+        finish_position = text_position(@cursor.line, @cursor.col + 1)
         char = @buffer.character_at(@cursor.line, @cursor.col).not_nil!
         offset = byte_offset(@cursor.line, @cursor.col)
-        delete_buffer_range(offset, char.bytesize)
-        text_changed
+        exact = delete_buffer_range(offset, char.bytesize)
+        text_changed(exact ? TextChange.new(start_position, finish_position, "") : TextChange.full)
       elsif @cursor.line < line_count - 1
         # Join with next line
+        start_position = current_text_position
+        finish_position = text_position(@cursor.line + 1, 0)
         offset = byte_offset(@cursor.line, length)
         finish = @buffer.line_start_offset(@cursor.line + 1)
-        delete_buffer_range(offset, finish - offset)
-        text_changed
+        exact = delete_buffer_range(offset, finish - offset)
+        text_changed(exact ? TextChange.new(start_position, finish_position, "") : TextChange.full)
       end
     end
 
     def delete_selection(record_undo : Bool = true) : Nil
-      sel = @selection
-      return unless sel
+      change = delete_selection_content(record_undo)
+      return unless change
 
-      begin_edit(nil) if record_undo
-      sel = sel.normalize
-      start_offset = byte_offset(sel.start_line, sel.start_col)
-      end_offset = byte_offset(sel.end_line, sel.end_col)
-      delete_buffer_range(start_offset, end_offset - start_offset)
-
-      @cursor.line = sel.start_line
-      @cursor.col = sel.start_col
-      @selection = nil
-      text_changed
+      text_changed(change[2] ? TextChange.new(change[0], change[1], "") : TextChange.full)
     end
 
     def select_all : Nil
@@ -575,14 +632,21 @@ module Tui
       return if normalized.empty? && @selection.nil?
 
       begin_edit(nil)
-      delete_selection(false) if @selection
-      return if normalized.empty?
+      selection_change = delete_selection_content(false) if @selection
+      start_position = selection_change.try(&.[0]) || current_text_position
+      finish_position = selection_change.try(&.[1]) || start_position
+      exact = selection_change.try(&.[2]) != false
+      if normalized.empty?
+        text_changed(exact ? TextChange.new(start_position, finish_position, "") : TextChange.full)
+        return
+      end
 
       offset = byte_offset(@cursor.line, @cursor.col)
-      @buffer.insert(offset, encode_newlines(normalized, offset))
+      inserted = encode_newlines(normalized, offset)
+      @buffer.insert(offset, inserted)
       advance_cursor_by(normalized)
 
-      text_changed
+      text_changed(exact ? TextChange.new(start_position, finish_position, inserted) : TextChange.full)
     end
 
     private def normalize_newlines(text : String) : String
@@ -761,9 +825,14 @@ module Tui
       mark_dirty!
     end
 
-    private def text_changed : Nil
+    private def text_changed(change : TextChange) : Nil
       @modified = true
       clear_folds if @fold_ranges.any?
+      notify_text_change(change)
+    end
+
+    private def notify_text_change(change : TextChange) : Nil
+      @on_text_change.try &.call(change)
       @on_change.try &.call
       ensure_cursor_visible
       mark_dirty!
@@ -812,9 +881,7 @@ module Tui
       @selection = nil
       @modified = !saved_state?
       clear_folds if @fold_ranges.any?
-      @on_change.try &.call
-      ensure_cursor_visible
-      mark_dirty!
+      notify_text_change(TextChange.full)
     ensure
       @recording_undo = true
     end
@@ -843,6 +910,32 @@ module Tui
       @buffer.byte_offset_at_codepoint(@buffer.codepoint_index_at_offset(start) + col)
     end
 
+    private def text_position(line : Int32, col : Int32) : TextPosition
+      TextPosition.new(line, col, @buffer.line_utf16_column(line, col))
+    end
+
+    private def current_text_position : TextPosition
+      text_position(@cursor.line, @cursor.col)
+    end
+
+    private def delete_selection_content(record_undo : Bool) : Tuple(TextPosition, TextPosition, Bool)?
+      sel = @selection
+      return nil unless sel
+
+      begin_edit(nil) if record_undo
+      sel = sel.normalize
+      start_position = text_position(sel.start_line, sel.start_col)
+      finish_position = text_position(sel.end_line, sel.end_col)
+      start_offset = byte_offset(sel.start_line, sel.start_col)
+      end_offset = byte_offset(sel.end_line, sel.end_col)
+      exact = delete_buffer_range(start_offset, end_offset - start_offset)
+
+      @cursor.line = sel.start_line
+      @cursor.col = sel.start_col
+      @selection = nil
+      {start_position, finish_position, exact}
+    end
+
     private def encode_newlines(content : String, offset : Int32) : String
       return content unless content.includes?('\n')
 
@@ -858,19 +951,19 @@ module Tui
 
     # Deleting content between a lone CR and a lone LF must not silently merge
     # two untouched logical line endings into one CRLF sequence.
-    private def delete_buffer_range(offset : Int32, length : Int32) : String
+    private def delete_buffer_range(offset : Int32, length : Int32) : Bool
       finish = offset + length
       joins_crlf = offset > 0 && finish < @buffer.byte_length &&
                    @buffer.byte_at_offset(offset - 1) == '\r'.ord &&
                    @buffer.byte_at_offset(finish) == '\n'.ord
       if joins_crlf
-        deleted = @buffer.slice(offset, length)
         @buffer.delete(offset, length + 1)
         replacement = @line_ending == "\n" ? "\n\n" : "\r\n"
         @buffer.insert(offset, replacement)
-        deleted
+        false
       else
         @buffer.delete(offset, length)
+        true
       end
     end
 

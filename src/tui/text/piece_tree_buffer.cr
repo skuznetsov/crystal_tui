@@ -18,6 +18,7 @@ module Tui
       getter length : Int32
       getter newlines : Int32
       getter codepoints : Int32
+      getter utf16_units : Int32
       getter starts_with_lf : Bool
       getter ends_with_cr : Bool
 
@@ -27,6 +28,7 @@ module Tui
         @length : Int32,
         @newlines : Int32,
         @codepoints : Int32,
+        @utf16_units : Int32,
         @starts_with_lf : Bool,
         @ends_with_cr : Bool,
       )
@@ -50,6 +52,7 @@ module Tui
       getter byte_length : Int32
       getter newline_count : Int32
       getter codepoint_count : Int32
+      getter utf16_unit_count : Int32
       getter piece_count : Int32
       getter height : Int32
       getter starts_with_lf : Bool
@@ -61,6 +64,7 @@ module Tui
         @newline_count -= 1 if @left.try(&.ends_with_cr) && @piece.starts_with_lf
         @newline_count -= 1 if @piece.ends_with_cr && @right.try(&.starts_with_lf)
         @codepoint_count = PieceTreeBuffer.node_codepoints(@left) + @piece.codepoints + PieceTreeBuffer.node_codepoints(@right)
+        @utf16_unit_count = PieceTreeBuffer.node_utf16_units(@left) + @piece.utf16_units + PieceTreeBuffer.node_utf16_units(@right)
         @piece_count = PieceTreeBuffer.node_count(@left) + 1 + PieceTreeBuffer.node_count(@right)
         @height = 1 + Math.max(PieceTreeBuffer.node_height(@left), PieceTreeBuffer.node_height(@right))
         @starts_with_lf = @left ? @left.not_nil!.starts_with_lf : @piece.starts_with_lf
@@ -159,6 +163,18 @@ module Tui
     def line_character_length(index : Int32) : Int32
       start, finish = line_content_range(index)
       codepoint_index_at_offset(finish) - codepoint_index_at_offset(start)
+    end
+
+    # Converts a character-indexed editor column to the UTF-16 code-unit
+    # coordinate used by LSP without materializing or scanning the line.
+    def line_utf16_column(index : Int32, column : Int32) : Int32
+      start, finish = line_content_range(index)
+      first_codepoint = codepoint_index_at_offset(start)
+      available = codepoint_index_at_offset(finish) - first_codepoint
+      raise ArgumentError.new("column outside line") unless column >= 0 && column <= available
+
+      target = byte_offset_at_codepoint(first_codepoint + column)
+      utf16_units_before_offset(target) - utf16_units_before_offset(start)
     end
 
     def line_slice(index : Int32, start_column : Int32, count : Int32) : String
@@ -377,6 +393,10 @@ module Tui
       node.try(&.codepoint_count) || 0
     end
 
+    protected def self.node_utf16_units(node : Node?) : Int32
+      node.try(&.utf16_unit_count) || 0
+    end
+
     protected def self.node_count(node : Node?) : Int32
       node.try(&.piece_count) || 0
     end
@@ -475,6 +495,7 @@ module Tui
         length,
         count_newlines(source, start, length),
         count_codepoints(source, start, length),
+        count_utf16_units(source, start, length),
         bytes[start] == '\n'.ord,
         bytes[start + length - 1] == '\r'.ord
       )
@@ -548,6 +569,7 @@ module Tui
           left_piece.length + right_piece.length,
           left_piece.newlines + right_piece.newlines - (left_piece.ends_with_cr && right_piece.starts_with_lf ? 1 : 0),
           left_piece.codepoints + right_piece.codepoints,
+          left_piece.utf16_units + right_piece.utf16_units,
           left_piece.starts_with_lf,
           right_piece.ends_with_cr
         )
@@ -804,6 +826,28 @@ module Tui
       count + count_codepoints_before(node.right, local - node.piece.length)
     end
 
+    private def utf16_units_before_offset(offset : Int32) : Int32
+      validate_boundary(offset)
+      count_utf16_units_before(@root, offset)
+    end
+
+    private def count_utf16_units_before(node : Node?, offset : Int32) : Int32
+      return 0 unless node
+
+      left_bytes = self.class.node_bytes(node.left)
+      if offset <= left_bytes
+        return count_utf16_units_before(node.left, offset)
+      end
+
+      count = self.class.node_utf16_units(node.left)
+      local = offset - left_bytes
+      take = Math.min(local, node.piece.length)
+      count += count_utf16_units(node.piece.source, node.piece.start, take)
+      return count if local <= node.piece.length
+
+      count + count_utf16_units_before(node.right, local - node.piece.length)
+    end
+
     private def codepoint_offset(node : Node?, ordinal : Int32, base : Int32) : Int32
       return base unless node
 
@@ -851,6 +895,18 @@ module Tui
       count
     end
 
+    private def count_utf16_units(source : Source, start : Int32, length : Int32) : Int32
+      count = 0
+      bytes = source.to_slice
+      length.times do |index|
+        byte = bytes[start + index]
+        next if byte & 0xc0 == 0x80
+
+        count += byte & 0xf8 == 0xf0 ? 2 : 1
+      end
+      count
+    end
+
     private def validate_range(offset : Int32, length : Int32) : Nil
       raise ArgumentError.new("length must not be negative") if length < 0
       validate_boundary(offset)
@@ -892,8 +948,10 @@ module Tui
       validate_source_boundary!(source, finish.to_i32)
       expected_piece_newlines = count_newlines(source, node.piece.start, node.piece.length)
       expected_piece_codepoints = count_codepoints(source, node.piece.start, node.piece.length)
+      expected_piece_utf16_units = count_utf16_units(source, node.piece.start, node.piece.length)
       raise "piece newline metric mismatch" unless expected_piece_newlines == node.piece.newlines
       raise "piece codepoint metric mismatch" unless expected_piece_codepoints == node.piece.codepoints
+      raise "piece UTF-16 metric mismatch" unless expected_piece_utf16_units == node.piece.utf16_units
       raise "treap heap invariant violated" if node.left && node.left.not_nil!.priority > node.priority
       raise "treap heap invariant violated" if node.right && node.right.not_nil!.priority > node.priority
 
@@ -904,6 +962,7 @@ module Tui
       expected_newlines -= 1 if node.left.try(&.ends_with_cr) && node.piece.starts_with_lf
       expected_newlines -= 1 if node.piece.ends_with_cr && node.right.try(&.starts_with_lf)
       expected_codepoints = self.class.node_codepoints(node.left) + node.piece.codepoints + self.class.node_codepoints(node.right)
+      expected_utf16_units = self.class.node_utf16_units(node.left) + node.piece.utf16_units + self.class.node_utf16_units(node.right)
       expected_count = left_count + 1 + right_count
       expected_height = 1 + Math.max(left_height, right_height)
       expected_starts_with_lf = node.left ? node.left.not_nil!.starts_with_lf : node.piece.starts_with_lf
@@ -911,6 +970,7 @@ module Tui
       raise "subtree byte metric mismatch" unless expected_bytes == node.byte_length
       raise "subtree newline metric mismatch" unless expected_newlines == node.newline_count
       raise "subtree codepoint metric mismatch" unless expected_codepoints == node.codepoint_count
+      raise "subtree UTF-16 metric mismatch" unless expected_utf16_units == node.utf16_unit_count
       raise "subtree piece metric mismatch" unless expected_count == node.piece_count
       raise "subtree height metric mismatch" unless expected_height == node.height
       raise "subtree first-byte metric mismatch" unless expected_starts_with_lf == node.starts_with_lf
