@@ -15,7 +15,7 @@ end
 
 describe Tui::TextEditor do
   it "round-trips final newlines and line-ending style" do
-    ["alpha", "alpha\n", "alpha\n\n", "alpha\r\nbeta\r\n"].each do |content|
+    ["alpha", "alpha\n", "alpha\n\n", "alpha\r\nbeta\r\n", "alpha\rbeta\r", "a\rb\r\nc\nd\r\n"].each do |content|
       with_editor_file(content) do |editor, path|
         editor.load_file(path).should be_true
         editor.text.should eq content
@@ -66,5 +66,13 @@ describe Tui::TextEditor do
     editor.text.should eq "old old\n"
     editor.redo.should be_true
     editor.text.should eq "new new\n"
+  end
+
+  it "keeps the legacy public EditState constructor" do
+    state = Tui::TextEditor::EditState.new("alpha\r\nbeta", 1, 2)
+
+    state.text.should eq "alpha\r\nbeta"
+    state.line.should eq 1
+    state.col.should eq 2
   end
 end

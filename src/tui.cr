@@ -44,6 +44,7 @@ require "./tui/unicode"
 # Widgets
 require "./tui/reactive"
 require "./tui/widget"
+require "./tui/text/piece_tree_buffer"
 
 # Containers
 require "./tui/containers/vbox"
