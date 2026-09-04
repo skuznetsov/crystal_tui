@@ -127,15 +127,21 @@ describe Tui::PieceTreeBuffer do
     end
     buffer.line_character_length(0).should eq 3
     buffer.line_character_length(1).should eq 3 # combining mark is a codepoint
+    buffer.line_utf16_column(0, 0).should eq 0
+    buffer.line_utf16_column(0, 2).should eq 2
+    buffer.line_utf16_column(0, 3).should eq 4 # astral emoji uses two UTF-16 units
+    buffer.line_utf16_column(1, 3).should eq 3 # CJK and combining marks use one each
     buffer.line_slice(0, 1, 2).should eq "é🙂"
     buffer.character_at(1, 0).should eq '界'
     buffer.character_at(1, 3).should be_nil
+    expect_raises(ArgumentError) { buffer.line_utf16_column(0, 4) }
     expect_raises(ArgumentError) { buffer.byte_offset_at_codepoint(-1) }
     expect_raises(ArgumentError) { buffer.byte_offset_at_codepoint(boundaries.size) }
 
     crlf = Tui::PieceTreeBuffer.new("Aé🙂\r\n界é")
     crlf.line_character_length(0).should eq 3
     crlf.line_character_length(1).should eq 3
+    crlf.line_utf16_column(0, 3).should eq 4
   end
 
   it "rejects invalid ranges without changing the buffer" do
