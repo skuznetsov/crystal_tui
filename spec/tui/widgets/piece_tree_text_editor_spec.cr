@@ -1,5 +1,23 @@
 require "../../spec_helper"
 
+private class SameTextCountingEditor < Tui::TextEditor
+  getter text_reads : Int32
+
+  def initialize(id : String)
+    @text_reads = 0
+    super(id)
+  end
+
+  def text : String
+    @text_reads += 1
+    super
+  end
+
+  def reset_text_reads : Nil
+    @text_reads = 0
+  end
+end
+
 private def piece_tree_editor(id : String, content : String = "") : Tui::TextEditor
   editor = Tui::TextEditor.new(id)
   editor.rect = Tui::Rect.new(0, 0, 80, 12)
@@ -9,6 +27,51 @@ private def piece_tree_editor(id : String, content : String = "") : Tui::TextEdi
 end
 
 describe Tui::TextEditor do
+  it "compares replacement text through the piece tree without reading text" do
+    editor = SameTextCountingEditor.new("replace-no-op")
+    editor.text = "same"
+    changes = [] of Tui::TextEditor::TextChange
+    legacy_calls = 0
+    editor.on_text_change { |change| changes << change }
+    editor.on_change { legacy_calls += 1 }
+    editor.reset_text_reads
+
+    editor.replace_text("same").should be_false
+    editor.text_reads.should eq 0
+    editor.can_undo?.should be_false
+    changes.should be_empty
+    legacy_calls.should eq 0
+  end
+
+  it "keeps changed replacement undoable and emits full changes without reading text" do
+    editor = SameTextCountingEditor.new("replace-changed")
+    editor.text = "old"
+    changes = [] of Tui::TextEditor::TextChange
+    editor.on_text_change { |change| changes << change }
+    editor.reset_text_reads
+
+    editor.replace_text("new").should be_true
+    editor.text_reads.should eq 0
+    changes.size.should eq 1
+    changes.last.full?.should be_true
+    editor.can_undo?.should be_true
+    editor.text.should eq "new"
+
+    editor.reset_text_reads
+    editor.undo.should be_true
+    editor.text_reads.should eq 0
+    changes.size.should eq 2
+    changes.last.full?.should be_true
+    editor.text.should eq "old"
+
+    editor.reset_text_reads
+    editor.redo.should be_true
+    editor.text_reads.should eq 0
+    changes.size.should eq 3
+    changes.last.full?.should be_true
+    editor.text.should eq "new"
+  end
+
   it "emits a bounded structured change with UTF-16 coordinates" do
     editor = piece_tree_editor("piece-tree-change-unicode", "a🙂界\r\nnext")
     changes = [] of Tui::TextEditor::TextChange
