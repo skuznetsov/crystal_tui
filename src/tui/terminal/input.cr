@@ -7,7 +7,7 @@ module Tui
     @input_fiber : Fiber?
     @input_provider : InputProvider
     @paste_mode : Bool = false
-    @paste_buffer : Array(UInt8)
+    @paste_buffer : IO::Memory
     @pending_events : Array(Event)
     @pending_burst : String
     @pending_burst_at : Time::Instant?
@@ -51,7 +51,7 @@ module Tui
     def initialize(@input_provider : InputProvider = StdinInputProvider.new)
       @buffer = [] of UInt8
       @event_channel = Channel(Event).new(32) # Buffered channel
-      @paste_buffer = [] of UInt8
+      @paste_buffer = IO::Memory.new
       @pending_events = [] of Event
       @pending_burst = ""
       @burst_buffer = IO::Memory.new
@@ -738,13 +738,12 @@ module Tui
       return nil if @buffer.empty? && @paste_buffer.empty?
 
       if end_idx = find_sequence(@buffer, PASTE_END)
-        end_idx.times { @paste_buffer << @buffer.shift }
+        end_idx.times { @paste_buffer.write_byte(@buffer.shift) }
         PASTE_END.size.times { @buffer.shift }
 
-        bytes = Slice(UInt8).new(@paste_buffer.size) { |i| @paste_buffer[i] }
-        text = String.new(bytes)
+        text = @paste_buffer.to_s
 
-        @paste_buffer.clear
+        @paste_buffer = IO::Memory.new
         @paste_mode = false
         return handle_non_char_event(PasteEvent.new(text))
       end
@@ -752,7 +751,7 @@ module Tui
       keep = PASTE_END.size - 1
       if @buffer.size > keep
         move_count = @buffer.size - keep
-        move_count.times { @paste_buffer << @buffer.shift }
+        move_count.times { @paste_buffer.write_byte(@buffer.shift) }
       end
 
       nil

@@ -17,6 +17,20 @@ private def burst_allocation_delta(chars : Int32) : UInt64
   GC.stats.total_bytes - before
 end
 
+private def bracketed_paste_allocation_delta(bytes : Int32) : UInt64
+  payload = "x" * bytes
+  input = "\e[200~#{payload}\e[201~"
+  parser = new_parser
+  GC.collect
+  before = GC.stats.total_bytes
+  events = parser.feed(input)
+  event = events.first?
+  unless events.size == 1 && event.is_a?(Tui::PasteEvent) && event.text == payload
+    raise "bracketed paste probe emitted incorrect events: #{events.inspect}"
+  end
+  GC.stats.total_bytes - before
+end
+
 describe Tui::InputParser do
   it "keeps long non-bracketed burst accumulation amortized-linear" do
     small = burst_allocation_delta(2_048)
@@ -26,6 +40,17 @@ describe Tui::InputParser do
     # Leave room for parser setup and GC noise while rejecting that shape.
     unless large < small * 6
       raise "burst allocation scaling is superlinear: 2K=#{small}, 8K=#{large}"
+    end
+  end
+
+  it "keeps bracketed paste finalization within one payload materialization" do
+    payload_bytes = 1_048_576
+    allocated = bracketed_paste_allocation_delta(payload_bytes)
+
+    # The old Array -> Slice -> String finalization allocated well over 4x
+    # the payload at this size. Keep this as an allocation bound, not timing.
+    unless allocated < payload_bytes.to_u64 * 4
+      raise "bracketed paste allocation bound exceeded: #{allocated} for #{payload_bytes} bytes"
     end
   end
 
@@ -83,6 +108,26 @@ describe Tui::InputParser do
     event = parser.feed("\e[200~a中\n\e[201~").first?
     raise "expected bracketed paste event, got #{event.inspect}" unless event.is_a?(Tui::PasteEvent) && event.text == "a中\n"
     raise "bracketed paste should not leave burst state" if parser.has_pending_burst?
+  end
+
+  it "preserves partial terminators inside bracketed paste payloads" do
+    parser = new_parser
+    text = "before\e[20x中\nafter"
+    event = parser.feed("\e[200~#{text}\e[201~").first?
+
+    raise "partial terminator changed paste payload: #{event.inspect}" unless event.is_a?(Tui::PasteEvent) && event.text == text
+  end
+
+  it "resets bracketed paste storage between empty and consecutive pastes" do
+    parser = new_parser
+    events = parser.feed("\e[200~\e[201~\e[200~next\e[201~\e[A")
+
+    unless events.size == 3 &&
+           events[0].is_a?(Tui::PasteEvent) && events[0].as(Tui::PasteEvent).text.empty? &&
+           events[1].is_a?(Tui::PasteEvent) && events[1].as(Tui::PasteEvent).text == "next" &&
+           events[2].is_a?(Tui::KeyEvent) && events[2].as(Tui::KeyEvent).key == Tui::Key::Up
+      raise "consecutive paste ordering changed: #{events.inspect}"
+    end
   end
 
   it "decodes Option/Alt+F from an ESC prefix" do
