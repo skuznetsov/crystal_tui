@@ -4,6 +4,56 @@ private def new_parser : Tui::InputParser
   Tui::InputParser.new(Tui::MockInputProvider.new)
 end
 
+private class ChunkInputProvider < Tui::InputProvider
+  getter read_into_calls : Int32 = 0
+
+  @bytes : Array(UInt8)
+
+  def initialize(data : String)
+    @bytes = data.bytes
+  end
+
+  def read_byte : UInt8?
+    return nil if @bytes.empty?
+    @bytes.shift
+  end
+
+  def read_into(buffer : Bytes) : Int32
+    @read_into_calls += 1
+    return 0 if @bytes.empty?
+
+    count = {@bytes.size, buffer.size}.min
+    count.times { |index| buffer[index] = @bytes[index] }
+    @bytes.shift(count)
+    count
+  end
+
+  def start : Nil
+  end
+
+  def stop : Nil
+  end
+end
+
+private class ByteOnlyInputProvider < Tui::InputProvider
+  @bytes : Array(UInt8)
+
+  def initialize(data : String)
+    @bytes = data.bytes
+  end
+
+  def read_byte : UInt8?
+    return nil if @bytes.empty?
+    @bytes.shift
+  end
+
+  def start : Nil
+  end
+
+  def stop : Nil
+  end
+end
+
 private def flush_after_burst_timeout(parser : Tui::InputParser) : Tui::Event?
   sleep Tui::InputParser::BURST_CHAR_INTERVAL + 2.milliseconds
   parser.flush_paste_burst
@@ -162,6 +212,36 @@ describe Tui::InputParser do
     end
   end
 
+  it "uses chunk-capable input provider reads in the input loop" do
+    provider = ChunkInputProvider.new("\e[A")
+    parser = Tui::InputParser.new(provider)
+    parser.start
+
+    begin
+      event = parser.read_event(100.milliseconds)
+      unless event.is_a?(Tui::KeyEvent) && event.key == Tui::Key::Up
+        raise "expected Up from chunk input provider, got #{event.inspect}"
+      end
+      raise "input loop did not use read_into" unless provider.read_into_calls > 0
+    ensure
+      parser.stop
+    end
+  end
+
+  it "keeps the byte-only provider fallback working in the input loop" do
+    parser = Tui::InputParser.new(ByteOnlyInputProvider.new("\e[A"))
+    parser.start
+
+    begin
+      event = parser.read_event(100.milliseconds)
+      unless event.is_a?(Tui::KeyEvent) && event.key == Tui::Key::Up
+        raise "expected Up from byte-only input provider, got #{event.inspect}"
+      end
+    ensure
+      parser.stop
+    end
+  end
+
   it "preserves UTF-8 characters in a non-bracketed burst" do
     parser = new_parser
     text = "a中🙂é"
@@ -169,6 +249,43 @@ describe Tui::InputParser do
 
     event = flush_after_burst_timeout(parser)
     raise "expected UTF-8 burst #{text.inspect}, got #{event.inspect}" unless event.is_a?(Tui::PasteEvent) && event.text == text
+  end
+
+  it "keeps delayed feed chunks as separate key events" do
+    parser = new_parser
+    raise "first delayed chunk emitted too early" unless parser.feed("a").empty?
+
+    sleep Tui::InputParser::BURST_CHAR_INTERVAL + 2.milliseconds
+    events = parser.feed("b")
+    unless events.size == 1 && events[0].is_a?(Tui::KeyEvent) && events[0].as(Tui::KeyEvent).char == 'a'
+      raise "delayed feed chunk changed key ordering: #{events.inspect}"
+    end
+
+    event = flush_after_burst_timeout(parser)
+    unless event.is_a?(Tui::KeyEvent) && event.char == 'b'
+      raise "delayed feed chunk should remain a key, got #{event.inspect}"
+    end
+  end
+
+  it "uses the final feed chunk time for delayed UTF-8 completion" do
+    parser = new_parser
+    raise "UTF-8 prefix emitted too early" unless parser.feed("a\xE4").empty?
+
+    sleep Tui::InputParser::BURST_CHAR_INTERVAL + 2.milliseconds
+    events = parser.feed("\xB8\xADb")
+    first = events.first?
+    unless events.size == 1 && first.is_a?(Tui::KeyEvent) && first.char == 'a'
+      raise "delayed UTF-8 completion changed key ordering: #{events.inspect}"
+    end
+
+    event = flush_after_burst_timeout(parser)
+    unless event.is_a?(Tui::KeyEvent) && event.char == '中'
+      raise "delayed UTF-8 completion should use final chunk time, got #{event.inspect}"
+    end
+    event = parser.flush_paste_burst
+    unless event.is_a?(Tui::KeyEvent) && event.char == 'b'
+      raise "delayed UTF-8 tail changed key ordering, got #{event.inspect}"
+    end
   end
 
   it "keeps the timer threshold for short input" do

@@ -47,6 +47,7 @@ module Tui
     BURST_MIN_CHARS      = 3
     BURST_CHAR_INTERVAL  = 8.milliseconds
     BURST_ENTER_SUPPRESS = 120.milliseconds
+    INPUT_BUFFER_SIZE    = 4096
 
     def initialize(@input_provider : InputProvider = StdinInputProvider.new)
       @buffer = [] of UInt8
@@ -62,9 +63,12 @@ module Tui
     # Feed raw terminal bytes and drain complete events (tests and tooling).
     def feed(data : String) : Array(Event)
       events = [] of Event
+      return events if data.empty?
+
+      now = Time.instant
       data.each_byte do |byte|
         @buffer << byte
-        while event = parse_buffer
+        while event = parse_buffer(now)
           events << event
         end
       end
@@ -140,24 +144,35 @@ module Tui
     end
 
     private def input_loop : Nil
+      read_buffer = Bytes.new(INPUT_BUFFER_SIZE)
+
       while @running
-        # Block until byte available (event-driven!)
-        byte = @input_provider.read_byte
-        break unless byte
+        # Block until input is available (event-driven!). Providers that only
+        # expose read_byte use InputProvider's one-byte fallback.
+        count = @input_provider.read_into(read_buffer)
+        break unless count > 0
 
-        @buffer << byte
-
-        # Try to parse complete events from buffer
-        while event = parse_buffer
+        now = Time.instant
+        count.times do |index|
           break unless @running
-          @event_channel.send(event) rescue break
+
+          @buffer << read_buffer[index]
+
+          # Try to parse complete events after each byte. A parser call can
+          # consume a byte without producing an event (for example, ordinary
+          # burst input), so the byte boundary must remain visible even when
+          # the provider supplies a chunk.
+          while event = parse_buffer(now)
+            break unless @running
+            @event_channel.send(event) rescue break
+          end
         end
       end
     rescue IO::Error
       # Input closed
     end
 
-    private def parse_buffer : Event?
+    private def parse_buffer(now : Time::Instant) : Event?
       return nil if @buffer.empty?
 
       if event = pop_pending_event
@@ -198,17 +213,17 @@ module Tui
       # Regular character - need to decode UTF-8 properly
       char = decode_utf8_char
       return nil unless char # Need more bytes for multi-byte char
-      handle_char(char)
+      handle_char(char, now)
     end
 
-    private def handle_char(char : Char) : Event?
+    private def handle_char(char : Char, now : Time::Instant) : Event?
       # Ignore NUL (Ctrl+Space) - used for system keyboard layout switching
       if char.ord == 0
         return nil
       end
 
       if char == '\r' || char == '\n'
-        return handle_enter_char(char)
+        return handle_enter_char(char, now)
       end
 
       if char.ord == 3
@@ -216,15 +231,13 @@ module Tui
       end
 
       if char.printable?
-        return handle_plain_char(char)
+        return handle_plain_char(char, now)
       end
 
       handle_non_char_event(KeyEvent.new(char))
     end
 
-    private def handle_plain_char(char : Char) : Event?
-      now = Time.instant
-
+    private def handle_plain_char(char : Char, now : Time::Instant) : Event?
       if @burst_active
         append_to_burst(char, now)
         return nil
@@ -261,8 +274,7 @@ module Tui
       pop_pending_event
     end
 
-    private def handle_enter_char(char : Char) : Event?
-      now = Time.instant
+    private def handle_enter_char(char : Char, now : Time::Instant) : Event?
       if should_capture_enter?(now)
         append_to_pending_or_burst('\n', now)
         return nil

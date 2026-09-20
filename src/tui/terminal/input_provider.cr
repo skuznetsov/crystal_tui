@@ -1,8 +1,26 @@
+require "deque"
+
 # Input provider abstraction for testability
 module Tui
   # Abstract input provider - can be real keyboard or mock
   abstract class InputProvider
     abstract def read_byte : UInt8?
+
+    # Read available input into a reusable buffer.
+    #
+    # The default preserves the byte-at-a-time contract for providers that
+    # only implement read_byte. Providers with a natural chunk boundary can
+    # override this to avoid one virtual call per byte.
+    def read_into(buffer : Bytes) : Int32
+      return 0 if buffer.empty?
+
+      byte = read_byte
+      return 0 unless byte
+
+      buffer[0] = byte
+      1
+    end
+
     abstract def start : Nil
     abstract def stop : Nil
   end
@@ -11,6 +29,10 @@ module Tui
   class StdinInputProvider < InputProvider
     def read_byte : UInt8?
       STDIN.read_byte
+    end
+
+    def read_into(buffer : Bytes) : Int32
+      STDIN.read(buffer)
     end
 
     def start : Nil
@@ -24,12 +46,12 @@ module Tui
 
   # Mock input for testing - reads from a queue
   class MockInputProvider < InputProvider
-    @queue : Array(UInt8)
+    @queue : Deque(UInt8)
     @event_queue : Array(Event)
     @blocking : Bool
 
     def initialize(@blocking : Bool = false)
-      @queue = [] of UInt8
+      @queue = Deque(UInt8).new
       @event_queue = [] of Event
     end
 
@@ -128,12 +150,12 @@ module Tui
       @queue << 27_u8 << '['.ord.to_u8 << '<'.ord.to_u8
 
       button_code = case button
-                    when .left?      then 0
-                    when .middle?    then 1
-                    when .right?     then 2
+                    when .left?       then 0
+                    when .middle?     then 1
+                    when .right?      then 2
                     when .wheel_up?   then 64
                     when .wheel_down? then 65
-                    else                  0
+                    else                   0
                     end
 
       button_code |= 32 if action.drag?
@@ -154,6 +176,24 @@ module Tui
         end
       end
       @queue.shift
+    end
+
+    def read_into(buffer : Bytes) : Int32
+      if @queue.empty?
+        if @blocking
+          # In blocking mode, wait (sleep) until queue has data
+          while @queue.empty?
+            sleep 10.milliseconds
+          end
+        else
+          return 0
+        end
+      end
+
+      count = {@queue.size, buffer.size}.min
+      count.times { |index| buffer[index] = @queue[index] }
+      @queue.shift(count)
+      count
     end
 
     def start : Nil
