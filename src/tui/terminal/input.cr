@@ -13,7 +13,7 @@ module Tui
     @pending_burst_at : Time::Instant?
     @pending_burst_chars : Int32 = 0
     @burst_active : Bool = false
-    @burst_buffer : String
+    @burst_buffer : IO::Memory
     @burst_last_at : Time::Instant?
     @burst_window_until : Time::Instant?
     @wakeup_scheduled : Bool = false
@@ -54,7 +54,7 @@ module Tui
       @paste_buffer = [] of UInt8
       @pending_events = [] of Event
       @pending_burst = ""
-      @burst_buffer = ""
+      @burst_buffer = IO::Memory.new
     end
 
     property input_provider : InputProvider
@@ -123,7 +123,7 @@ module Tui
       now = Time.instant
 
       if @burst_active && burst_timed_out?(now)
-        event = PasteEvent.new(@burst_buffer)
+        event = PasteEvent.new(@burst_buffer.to_s)
         reset_burst
         return event
       end
@@ -284,7 +284,7 @@ module Tui
     private def start_burst(now : Time::Instant) : Nil
       return if @pending_burst.empty?
       @burst_active = true
-      @burst_buffer = @pending_burst
+      @burst_buffer << @pending_burst
       @pending_burst = ""
       @pending_burst_at = nil
       @pending_burst_chars = 0
@@ -294,7 +294,7 @@ module Tui
     end
 
     private def append_to_burst(char : Char, now : Time::Instant) : Nil
-      @burst_buffer += char
+      @burst_buffer << char
       @burst_last_at = now
       @burst_window_until = now + BURST_ENTER_SUPPRESS
       schedule_wakeup
@@ -323,7 +323,7 @@ module Tui
 
     private def flush_all_buffers : Nil
       if @burst_active
-        enqueue_event(PasteEvent.new(@burst_buffer))
+        enqueue_event(PasteEvent.new(@burst_buffer.to_s))
         reset_burst
       end
 
@@ -339,7 +339,7 @@ module Tui
 
     private def reset_burst : Nil
       @burst_active = false
-      @burst_buffer = ""
+      @burst_buffer = IO::Memory.new
       @burst_last_at = nil
     end
 
