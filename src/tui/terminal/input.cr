@@ -137,6 +137,7 @@ module Tui
         @pending_burst = ""
         @pending_burst_at = nil
         @pending_burst_chars = 0
+        @burst_window_until = nil
         return pop_pending_event
       end
 
@@ -353,6 +354,7 @@ module Tui
       @burst_active = false
       @burst_buffer = IO::Memory.new
       @burst_last_at = nil
+      @burst_window_until = nil
     end
 
     # Decode a complete UTF-8 character from buffer

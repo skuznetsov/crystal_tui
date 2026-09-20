@@ -192,6 +192,33 @@ describe Tui::InputParser do
     raise "reset burst leaked previous text: #{second.inspect}" unless second.is_a?(Tui::PasteEvent) && second.text == "xyz"
   end
 
+  it "delivers Enter immediately after a timed-out paste burst" do
+    parser = new_parser
+    raise "burst input emitted before timeout" unless parser.feed("abc").empty?
+
+    event = flush_after_burst_timeout(parser)
+    unless event.is_a?(Tui::PasteEvent) && event.text == "abc"
+      raise "expected timed-out burst paste, got #{event.inspect}"
+    end
+
+    events = parser.feed("\r")
+    enter = events.first?
+    unless events.size == 1 && enter.is_a?(Tui::KeyEvent) && enter.char == '\r'
+      raise "Enter was captured by a completed paste burst: #{events.inspect}"
+    end
+    raise "completed paste burst retained pending state" if parser.has_pending_burst?
+  end
+
+  it "keeps Enter inside an active paste burst before timeout" do
+    parser = new_parser
+    raise "active paste burst emitted too early" unless parser.feed("abc\r").empty?
+
+    event = flush_after_burst_timeout(parser)
+    unless event.is_a?(Tui::PasteEvent) && event.text == "abc\n"
+      raise "active paste burst lost Enter: #{event.inspect}"
+    end
+  end
+
   it "wakes the input loop to flush an active burst" do
     provider = Tui::MockInputProvider.new
     provider.push_string("abc")
@@ -298,6 +325,23 @@ describe Tui::InputParser do
       raise "short input should flush as key events, got #{first.inspect}, #{second.inspect}"
     end
     raise "short input should be fully flushed" if parser.has_pending_burst?
+  end
+
+  it "delivers Enter immediately after timed-out short input" do
+    parser = new_parser
+    raise "short input emitted before timeout" unless parser.feed("a").empty?
+
+    event = flush_after_burst_timeout(parser)
+    unless event.is_a?(Tui::KeyEvent) && event.char == 'a'
+      raise "expected timed-out short input, got #{event.inspect}"
+    end
+
+    events = parser.feed("\r")
+    enter = events.first?
+    unless events.size == 1 && enter.is_a?(Tui::KeyEvent) && enter.char == '\r'
+      raise "Enter was captured by completed short input: #{events.inspect}"
+    end
+    raise "completed short input retained pending state" if parser.has_pending_burst?
   end
 
   it "flushes an active burst before a following key event" do
