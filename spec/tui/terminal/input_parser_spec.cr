@@ -31,7 +31,7 @@ private def bracketed_paste_allocation_delta(bytes : Int32) : UInt64
   GC.stats.total_bytes - before
 end
 
-private def ascii_decode_allocation_delta(bytes : Int32) : UInt64
+private def ascii_burst_allocation_delta(bytes : Int32) : UInt64
   payload = "x" * bytes
   parser = new_parser
   GC.collect
@@ -49,13 +49,13 @@ private def paste_text_before_up(parser : Tui::InputParser, data : String) : Str
 end
 
 describe Tui::InputParser do
-  it "keeps ASCII decode allocations below a fixed bound" do
-    allocated = ascii_decode_allocation_delta(100_000)
+  it "keeps ASCII burst allocations below a fixed bound" do
+    allocated = ascii_burst_allocation_delta(100_000)
 
-    # The allocating decoder used about 5 MB for this payload. Leave allocator
-    # headroom while still rejecting a return to per-character Slice/String work.
-    unless allocated < 3_000_000
-      raise "ASCII decode allocation bound exceeded: #{allocated} bytes"
+    # The buffer itself grows geometrically to 128 KiB at this size. Leave
+    # allocator headroom while rejecting per-character decoder or timer work.
+    unless allocated < 1_000_000
+      raise "ASCII burst allocation bound exceeded: #{allocated} bytes"
     end
   end
 
@@ -140,6 +140,26 @@ describe Tui::InputParser do
     parser.feed("xyz")
     second = flush_after_burst_timeout(parser)
     raise "reset burst leaked previous text: #{second.inspect}" unless second.is_a?(Tui::PasteEvent) && second.text == "xyz"
+  end
+
+  it "wakes the input loop to flush an active burst" do
+    provider = Tui::MockInputProvider.new
+    provider.push_string("abc")
+    parser = Tui::InputParser.new(provider)
+    parser.start
+
+    begin
+      wakeup = parser.read_event(100.milliseconds)
+      raise "expected burst wakeup, got #{wakeup.inspect}" unless wakeup.is_a?(Tui::WakeupEvent)
+
+      event = parser.flush_paste_burst
+      unless event.is_a?(Tui::PasteEvent) && event.text == "abc"
+        raise "expected timed-out burst paste after wakeup, got #{event.inspect}"
+      end
+      raise "burst should be reset after wakeup flush" if parser.has_pending_burst?
+    ensure
+      parser.stop
+    end
   end
 
   it "preserves UTF-8 characters in a non-bracketed burst" do

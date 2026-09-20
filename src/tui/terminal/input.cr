@@ -850,7 +850,10 @@ module Tui
     private def schedule_wakeup : Nil
       return if @wakeup_scheduled
       @wakeup_scheduled = true
+      spawn_wakeup_timer
+    end
 
+    private def spawn_wakeup_timer : Nil
       spawn do
         sleep BURST_CHAR_INTERVAL + 1.milliseconds
         @wakeup_scheduled = false
