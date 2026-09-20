@@ -367,15 +367,61 @@ module Tui
       # Check if we have enough bytes
       return nil if @buffer.size < byte_count
 
-      # Extract bytes and decode
-      bytes = Slice(UInt8).new(byte_count)
-      byte_count.times do |i|
-        bytes[i] = @buffer.shift
-      end
+      case byte_count
+      when 1
+        @buffer.shift.unsafe_chr
+      when 2
+        second = @buffer[1]
+        if first >= 0xC2 && second & 0xC0 == 0x80
+          codepoint = ((first.to_u32 & 0x1F) << 6) | (second.to_u32 & 0x3F)
+          consume_utf8_bytes(byte_count)
+          codepoint.unsafe_chr
+        else
+          consume_utf8_bytes(byte_count)
+          '\uFFFD'
+        end
+      when 3
+        second = @buffer[1]
+        third = @buffer[2]
+        valid = second & 0xC0 == 0x80 && third & 0xC0 == 0x80
+        valid = false if first == 0xE0 && second < 0xA0
+        valid = false if first == 0xED && second >= 0xA0
 
-      # Convert bytes to string, then extract char
-      str = String.new(bytes)
-      str.empty? ? '\uFFFD' : str[0]
+        if valid
+          codepoint = ((first.to_u32 & 0x0F) << 12) |
+                      ((second.to_u32 & 0x3F) << 6) |
+                      (third.to_u32 & 0x3F)
+          consume_utf8_bytes(byte_count)
+          codepoint.unsafe_chr
+        else
+          consume_utf8_bytes(byte_count)
+          '\uFFFD'
+        end
+      else
+        second = @buffer[1]
+        third = @buffer[2]
+        fourth = @buffer[3]
+        valid = second & 0xC0 == 0x80 && third & 0xC0 == 0x80 && fourth & 0xC0 == 0x80
+        valid = false if first == 0xF0 && second < 0x90
+        valid = false if first == 0xF4 && second >= 0x90
+        valid = false if first >= 0xF5
+
+        if valid
+          codepoint = ((first.to_u32 & 0x07) << 18) |
+                      ((second.to_u32 & 0x3F) << 12) |
+                      ((third.to_u32 & 0x3F) << 6) |
+                      (fourth.to_u32 & 0x3F)
+          consume_utf8_bytes(byte_count)
+          codepoint.unsafe_chr
+        else
+          consume_utf8_bytes(byte_count)
+          '\uFFFD'
+        end
+      end
+    end
+
+    private def consume_utf8_bytes(byte_count : Int32) : Nil
+      byte_count.times { @buffer.shift }
     end
 
     private def parse_escape_sequence : Event?

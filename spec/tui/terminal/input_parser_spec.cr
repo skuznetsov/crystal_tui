@@ -31,7 +31,81 @@ private def bracketed_paste_allocation_delta(bytes : Int32) : UInt64
   GC.stats.total_bytes - before
 end
 
+private def ascii_decode_allocation_delta(bytes : Int32) : UInt64
+  payload = "x" * bytes
+  parser = new_parser
+  GC.collect
+  before = GC.stats.total_bytes
+  parser.feed(payload)
+  GC.stats.total_bytes - before
+end
+
+private def paste_text_before_up(parser : Tui::InputParser, data : String) : String
+  events = parser.feed(data + "\e[A")
+  unless events.size == 1 && events[0].is_a?(Tui::PasteEvent)
+    raise "expected paste before Up, got #{events.inspect}"
+  end
+  events[0].as(Tui::PasteEvent).text
+end
+
 describe Tui::InputParser do
+  it "keeps ASCII decode allocations below a fixed bound" do
+    allocated = ascii_decode_allocation_delta(100_000)
+
+    # The allocating decoder used about 5 MB for this payload. Leave allocator
+    # headroom while still rejecting a return to per-character Slice/String work.
+    unless allocated < 3_000_000
+      raise "ASCII decode allocation bound exceeded: #{allocated} bytes"
+    end
+  end
+
+  it "decodes valid two-, three-, and four-byte UTF-8 sequences across feeds" do
+    parser = new_parser
+
+    two_byte = "\xC3\xA9"
+    three_byte = "\xE4\xB8\xAD"
+    four_byte = "\xF0\x9F\x99\x82"
+
+    raise "2-byte prefix emitted early" unless parser.feed("\xC3").empty?
+    raise "2-byte split decode changed" unless paste_text_before_up(parser, "\xA9#{two_byte}#{two_byte}") == "ééé"
+
+    parser = new_parser
+    raise "3-byte prefix emitted early" unless parser.feed("\xE4\xB8").empty?
+    raise "3-byte split decode changed" unless paste_text_before_up(parser, "\xAD#{three_byte}#{three_byte}") == "中中中"
+
+    parser = new_parser
+    raise "4-byte prefix emitted early" unless parser.feed("\xF0\x9F\x99").empty?
+    raise "4-byte split decode changed" unless paste_text_before_up(parser, "\x82#{four_byte}#{four_byte}") == "🙂🙂🙂"
+  end
+
+  it "preserves malformed UTF-8 replacement and declared-width consumption" do
+    cases = [
+      {"invalid start", "\x80"},
+      {"invalid continuation", "\xC2\x41"},
+      {"overlong two-byte", "\xC0\x80"},
+      {"overlong three-byte", "\xE0\x80\x80"},
+      {"surrogate", "\xED\xA0\x80"},
+      {"out of range", "\xF4\x90\x80\x80"},
+      {"invalid four-byte lead", "\xF5\x80\x80\x80"},
+    ]
+
+    cases.each do |name, malformed|
+      parser = new_parser
+      text = paste_text_before_up(parser, malformed + "abc")
+      expected = "�abc"
+      raise "#{name} changed: expected #{expected.inspect}, got #{text.inspect}" unless text == expected
+    end
+  end
+
+  it "keeps incomplete declared sequences buffered until complete" do
+    parser = new_parser
+    raise "incomplete 3-byte prefix emitted early" unless parser.feed("\xE2").empty?
+    raise "incomplete 3-byte prefix consumed too soon" unless parser.feed("\x82").empty?
+
+    text = paste_text_before_up(parser, "\xACabc")
+    raise "incomplete sequence recovery changed: #{text.inspect}" unless text == "€abc"
+  end
+
   it "keeps long non-bracketed burst accumulation amortized-linear" do
     small = burst_allocation_delta(2_048)
     large = burst_allocation_delta(8_192)
