@@ -69,6 +69,37 @@ private def assert_piece_tree_matches(buffer : Tui::PieceTreeBuffer, reference :
 end
 
 describe Tui::PieceTreeBuffer do
+  it "compares supplied text without changing the buffer" do
+    empty = Tui::PieceTreeBuffer.new
+    empty.same_text?("").should be_true
+    empty.same_text?("x").should be_false
+
+    text = "alpha\nβeta\r\n🙂 tail"
+    buffer = Tui::PieceTreeBuffer.new(text)
+    buffer.same_text?(text).should be_true
+    buffer.same_text?("Alpha\nβeta\r\n🙂 tail").should be_false
+    buffer.same_text?("alpha\nβeta\r\n🙂 taix").should be_false
+    buffer.same_text?("alpha\nβeta\r\n🙂 tails").should be_false
+    buffer.same_text?("alpha\nβeta\n🙂 tail").should be_false
+    buffer.text.should eq text
+  end
+
+  it "compares across piece boundaries including UTF-8 and newlines" do
+    boundary_line = "a" * 2_047 + "\n"
+    text = boundary_line * 4 + "tail αβ🙂\r\n"
+    buffer = Tui::PieceTreeBuffer.new(text)
+    buffer.piece_count.should be > 1
+    buffer.same_text?(text).should be_true
+
+    mismatch_offset = boundary_line.bytesize * 2
+    mismatch = String.build do |io|
+      io << text.byte_slice(0, mismatch_offset)
+      io << 'b'
+      io << text.byte_slice(mismatch_offset + 1, text.bytesize - mismatch_offset - 1)
+    end
+    buffer.same_text?(mismatch).should be_false
+  end
+
   it "initializes from UTF-8 text and exposes logical lines" do
     buffer = Tui::PieceTreeBuffer.new("alpha\nβeta\n")
 

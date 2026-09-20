@@ -7,13 +7,13 @@ module Tui
     @input_fiber : Fiber?
     @input_provider : InputProvider
     @paste_mode : Bool = false
-    @paste_buffer : Array(UInt8)
+    @paste_buffer : IO::Memory
     @pending_events : Array(Event)
     @pending_burst : String
     @pending_burst_at : Time::Instant?
     @pending_burst_chars : Int32 = 0
     @burst_active : Bool = false
-    @burst_buffer : String
+    @burst_buffer : IO::Memory
     @burst_last_at : Time::Instant?
     @burst_window_until : Time::Instant?
     @wakeup_scheduled : Bool = false
@@ -47,14 +47,15 @@ module Tui
     BURST_MIN_CHARS      = 3
     BURST_CHAR_INTERVAL  = 8.milliseconds
     BURST_ENTER_SUPPRESS = 120.milliseconds
+    INPUT_BUFFER_SIZE    = 4096
 
     def initialize(@input_provider : InputProvider = StdinInputProvider.new)
       @buffer = [] of UInt8
       @event_channel = Channel(Event).new(32) # Buffered channel
-      @paste_buffer = [] of UInt8
+      @paste_buffer = IO::Memory.new
       @pending_events = [] of Event
       @pending_burst = ""
-      @burst_buffer = ""
+      @burst_buffer = IO::Memory.new
     end
 
     property input_provider : InputProvider
@@ -62,9 +63,12 @@ module Tui
     # Feed raw terminal bytes and drain complete events (tests and tooling).
     def feed(data : String) : Array(Event)
       events = [] of Event
+      return events if data.empty?
+
+      now = Time.instant
       data.each_byte do |byte|
         @buffer << byte
-        while event = parse_buffer
+        while event = parse_buffer(now)
           events << event
         end
       end
@@ -123,7 +127,7 @@ module Tui
       now = Time.instant
 
       if @burst_active && burst_timed_out?(now)
-        event = PasteEvent.new(@burst_buffer)
+        event = PasteEvent.new(@burst_buffer.to_s)
         reset_burst
         return event
       end
@@ -133,6 +137,7 @@ module Tui
         @pending_burst = ""
         @pending_burst_at = nil
         @pending_burst_chars = 0
+        @burst_window_until = nil
         return pop_pending_event
       end
 
@@ -140,24 +145,35 @@ module Tui
     end
 
     private def input_loop : Nil
+      read_buffer = Bytes.new(INPUT_BUFFER_SIZE)
+
       while @running
-        # Block until byte available (event-driven!)
-        byte = @input_provider.read_byte
-        break unless byte
+        # Block until input is available (event-driven!). Providers that only
+        # expose read_byte use InputProvider's one-byte fallback.
+        count = @input_provider.read_into(read_buffer)
+        break unless count > 0
 
-        @buffer << byte
-
-        # Try to parse complete events from buffer
-        while event = parse_buffer
+        now = Time.instant
+        count.times do |index|
           break unless @running
-          @event_channel.send(event) rescue break
+
+          @buffer << read_buffer[index]
+
+          # Try to parse complete events after each byte. A parser call can
+          # consume a byte without producing an event (for example, ordinary
+          # burst input), so the byte boundary must remain visible even when
+          # the provider supplies a chunk.
+          while event = parse_buffer(now)
+            break unless @running
+            @event_channel.send(event) rescue break
+          end
         end
       end
     rescue IO::Error
       # Input closed
     end
 
-    private def parse_buffer : Event?
+    private def parse_buffer(now : Time::Instant) : Event?
       return nil if @buffer.empty?
 
       if event = pop_pending_event
@@ -198,17 +214,17 @@ module Tui
       # Regular character - need to decode UTF-8 properly
       char = decode_utf8_char
       return nil unless char # Need more bytes for multi-byte char
-      handle_char(char)
+      handle_char(char, now)
     end
 
-    private def handle_char(char : Char) : Event?
+    private def handle_char(char : Char, now : Time::Instant) : Event?
       # Ignore NUL (Ctrl+Space) - used for system keyboard layout switching
       if char.ord == 0
         return nil
       end
 
       if char == '\r' || char == '\n'
-        return handle_enter_char(char)
+        return handle_enter_char(char, now)
       end
 
       if char.ord == 3
@@ -216,15 +232,13 @@ module Tui
       end
 
       if char.printable?
-        return handle_plain_char(char)
+        return handle_plain_char(char, now)
       end
 
       handle_non_char_event(KeyEvent.new(char))
     end
 
-    private def handle_plain_char(char : Char) : Event?
-      now = Time.instant
-
+    private def handle_plain_char(char : Char, now : Time::Instant) : Event?
       if @burst_active
         append_to_burst(char, now)
         return nil
@@ -261,8 +275,7 @@ module Tui
       pop_pending_event
     end
 
-    private def handle_enter_char(char : Char) : Event?
-      now = Time.instant
+    private def handle_enter_char(char : Char, now : Time::Instant) : Event?
       if should_capture_enter?(now)
         append_to_pending_or_burst('\n', now)
         return nil
@@ -284,7 +297,7 @@ module Tui
     private def start_burst(now : Time::Instant) : Nil
       return if @pending_burst.empty?
       @burst_active = true
-      @burst_buffer = @pending_burst
+      @burst_buffer << @pending_burst
       @pending_burst = ""
       @pending_burst_at = nil
       @pending_burst_chars = 0
@@ -294,7 +307,7 @@ module Tui
     end
 
     private def append_to_burst(char : Char, now : Time::Instant) : Nil
-      @burst_buffer += char
+      @burst_buffer << char
       @burst_last_at = now
       @burst_window_until = now + BURST_ENTER_SUPPRESS
       schedule_wakeup
@@ -323,7 +336,7 @@ module Tui
 
     private def flush_all_buffers : Nil
       if @burst_active
-        enqueue_event(PasteEvent.new(@burst_buffer))
+        enqueue_event(PasteEvent.new(@burst_buffer.to_s))
         reset_burst
       end
 
@@ -339,8 +352,9 @@ module Tui
 
     private def reset_burst : Nil
       @burst_active = false
-      @burst_buffer = ""
+      @burst_buffer = IO::Memory.new
       @burst_last_at = nil
+      @burst_window_until = nil
     end
 
     # Decode a complete UTF-8 character from buffer
@@ -367,15 +381,61 @@ module Tui
       # Check if we have enough bytes
       return nil if @buffer.size < byte_count
 
-      # Extract bytes and decode
-      bytes = Slice(UInt8).new(byte_count)
-      byte_count.times do |i|
-        bytes[i] = @buffer.shift
-      end
+      case byte_count
+      when 1
+        @buffer.shift.unsafe_chr
+      when 2
+        second = @buffer[1]
+        if first >= 0xC2 && second & 0xC0 == 0x80
+          codepoint = ((first.to_u32 & 0x1F) << 6) | (second.to_u32 & 0x3F)
+          consume_utf8_bytes(byte_count)
+          codepoint.unsafe_chr
+        else
+          consume_utf8_bytes(byte_count)
+          '\uFFFD'
+        end
+      when 3
+        second = @buffer[1]
+        third = @buffer[2]
+        valid = second & 0xC0 == 0x80 && third & 0xC0 == 0x80
+        valid = false if first == 0xE0 && second < 0xA0
+        valid = false if first == 0xED && second >= 0xA0
 
-      # Convert bytes to string, then extract char
-      str = String.new(bytes)
-      str.empty? ? '\uFFFD' : str[0]
+        if valid
+          codepoint = ((first.to_u32 & 0x0F) << 12) |
+                      ((second.to_u32 & 0x3F) << 6) |
+                      (third.to_u32 & 0x3F)
+          consume_utf8_bytes(byte_count)
+          codepoint.unsafe_chr
+        else
+          consume_utf8_bytes(byte_count)
+          '\uFFFD'
+        end
+      else
+        second = @buffer[1]
+        third = @buffer[2]
+        fourth = @buffer[3]
+        valid = second & 0xC0 == 0x80 && third & 0xC0 == 0x80 && fourth & 0xC0 == 0x80
+        valid = false if first == 0xF0 && second < 0x90
+        valid = false if first == 0xF4 && second >= 0x90
+        valid = false if first >= 0xF5
+
+        if valid
+          codepoint = ((first.to_u32 & 0x07) << 18) |
+                      ((second.to_u32 & 0x3F) << 12) |
+                      ((third.to_u32 & 0x3F) << 6) |
+                      (fourth.to_u32 & 0x3F)
+          consume_utf8_bytes(byte_count)
+          codepoint.unsafe_chr
+        else
+          consume_utf8_bytes(byte_count)
+          '\uFFFD'
+        end
+      end
+    end
+
+    private def consume_utf8_bytes(byte_count : Int32) : Nil
+      byte_count.times { @buffer.shift }
     end
 
     private def parse_escape_sequence : Event?
@@ -738,13 +798,12 @@ module Tui
       return nil if @buffer.empty? && @paste_buffer.empty?
 
       if end_idx = find_sequence(@buffer, PASTE_END)
-        end_idx.times { @paste_buffer << @buffer.shift }
+        end_idx.times { @paste_buffer.write_byte(@buffer.shift) }
         PASTE_END.size.times { @buffer.shift }
 
-        bytes = Slice(UInt8).new(@paste_buffer.size) { |i| @paste_buffer[i] }
-        text = String.new(bytes)
+        text = @paste_buffer.to_s
 
-        @paste_buffer.clear
+        @paste_buffer = IO::Memory.new
         @paste_mode = false
         return handle_non_char_event(PasteEvent.new(text))
       end
@@ -752,7 +811,7 @@ module Tui
       keep = PASTE_END.size - 1
       if @buffer.size > keep
         move_count = @buffer.size - keep
-        move_count.times { @paste_buffer << @buffer.shift }
+        move_count.times { @paste_buffer.write_byte(@buffer.shift) }
       end
 
       nil
@@ -805,7 +864,10 @@ module Tui
     private def schedule_wakeup : Nil
       return if @wakeup_scheduled
       @wakeup_scheduled = true
+      spawn_wakeup_timer
+    end
 
+    private def spawn_wakeup_timer : Nil
       spawn do
         sleep BURST_CHAR_INTERVAL + 1.milliseconds
         @wakeup_scheduled = false

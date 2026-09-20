@@ -476,7 +476,7 @@ module Tui
     # Replace the complete document as a single undoable edit.
     # This is intended for transformations such as replace-all and formatting.
     def replace_text(content : String) : Bool
-      return false if content == text
+      return false if @buffer.same_text?(content)
 
       begin_edit(nil)
       line = @cursor.line

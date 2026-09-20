@@ -145,6 +145,14 @@ module Tui
       slice(0, byte_length)
     end
 
+    # Compares the active document with supplied UTF-8 bytes without
+    # materializing the piece tree as a String.
+    def same_text?(value : String) : Bool
+      return false unless byte_length == value.bytesize
+
+      same_text_node?(@root, value.to_slice, 0)
+    end
+
     def line(index : Int32) : String
       start, finish = line_content_range(index)
       slice(start, finish - start)
@@ -695,6 +703,17 @@ module Tui
       return if length <= 0
 
       append_range(io, node.right, local - node.piece.length, length)
+    end
+
+    private def same_text_node?(node : Node?, value : Slice(UInt8), base : Int32) : Bool
+      return true unless node
+      return false unless same_text_node?(node.left, value, base)
+
+      piece_base = base + self.class.node_bytes(node.left)
+      source = node.piece.source.to_slice
+      return false unless source[node.piece.start, node.piece.length] == value[piece_base, node.piece.length]
+
+      same_text_node?(node.right, value, piece_base + node.piece.length)
     end
 
     private def character_at_offset(offset : Int32) : Char

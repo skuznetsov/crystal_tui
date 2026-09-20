@@ -4,7 +4,387 @@ private def new_parser : Tui::InputParser
   Tui::InputParser.new(Tui::MockInputProvider.new)
 end
 
+private class ChunkInputProvider < Tui::InputProvider
+  getter read_into_calls : Int32 = 0
+
+  @bytes : Array(UInt8)
+
+  def initialize(data : String)
+    @bytes = data.bytes
+  end
+
+  def read_byte : UInt8?
+    return nil if @bytes.empty?
+    @bytes.shift
+  end
+
+  def read_into(buffer : Bytes) : Int32
+    @read_into_calls += 1
+    return 0 if @bytes.empty?
+
+    count = {@bytes.size, buffer.size}.min
+    count.times { |index| buffer[index] = @bytes[index] }
+    @bytes.shift(count)
+    count
+  end
+
+  def start : Nil
+  end
+
+  def stop : Nil
+  end
+end
+
+private class ByteOnlyInputProvider < Tui::InputProvider
+  @bytes : Array(UInt8)
+
+  def initialize(data : String)
+    @bytes = data.bytes
+  end
+
+  def read_byte : UInt8?
+    return nil if @bytes.empty?
+    @bytes.shift
+  end
+
+  def start : Nil
+  end
+
+  def stop : Nil
+  end
+end
+
+private def flush_after_burst_timeout(parser : Tui::InputParser) : Tui::Event?
+  sleep Tui::InputParser::BURST_CHAR_INTERVAL + 2.milliseconds
+  parser.flush_paste_burst
+end
+
+private def burst_allocation_delta(chars : Int32) : UInt64
+  GC.collect
+  before = GC.stats.total_bytes
+  parser = new_parser
+  parser.feed("x" * chars)
+  GC.stats.total_bytes - before
+end
+
+private def bracketed_paste_allocation_delta(bytes : Int32) : UInt64
+  payload = "x" * bytes
+  input = "\e[200~#{payload}\e[201~"
+  parser = new_parser
+  GC.collect
+  before = GC.stats.total_bytes
+  events = parser.feed(input)
+  event = events.first?
+  unless events.size == 1 && event.is_a?(Tui::PasteEvent) && event.text == payload
+    raise "bracketed paste probe emitted incorrect events: #{events.inspect}"
+  end
+  GC.stats.total_bytes - before
+end
+
+private def ascii_burst_allocation_delta(bytes : Int32) : UInt64
+  payload = "x" * bytes
+  parser = new_parser
+  GC.collect
+  before = GC.stats.total_bytes
+  parser.feed(payload)
+  GC.stats.total_bytes - before
+end
+
+private def paste_text_before_up(parser : Tui::InputParser, data : String) : String
+  events = parser.feed(data + "\e[A")
+  unless events.size == 1 && events[0].is_a?(Tui::PasteEvent)
+    raise "expected paste before Up, got #{events.inspect}"
+  end
+  events[0].as(Tui::PasteEvent).text
+end
+
 describe Tui::InputParser do
+  it "keeps ASCII burst allocations below a fixed bound" do
+    allocated = ascii_burst_allocation_delta(100_000)
+
+    # The buffer itself grows geometrically to 128 KiB at this size. Leave
+    # allocator headroom while rejecting per-character decoder or timer work.
+    unless allocated < 1_000_000
+      raise "ASCII burst allocation bound exceeded: #{allocated} bytes"
+    end
+  end
+
+  it "decodes valid two-, three-, and four-byte UTF-8 sequences across feeds" do
+    parser = new_parser
+
+    two_byte = "\xC3\xA9"
+    three_byte = "\xE4\xB8\xAD"
+    four_byte = "\xF0\x9F\x99\x82"
+
+    raise "2-byte prefix emitted early" unless parser.feed("\xC3").empty?
+    raise "2-byte split decode changed" unless paste_text_before_up(parser, "\xA9#{two_byte}#{two_byte}") == "ééé"
+
+    parser = new_parser
+    raise "3-byte prefix emitted early" unless parser.feed("\xE4\xB8").empty?
+    raise "3-byte split decode changed" unless paste_text_before_up(parser, "\xAD#{three_byte}#{three_byte}") == "中中中"
+
+    parser = new_parser
+    raise "4-byte prefix emitted early" unless parser.feed("\xF0\x9F\x99").empty?
+    raise "4-byte split decode changed" unless paste_text_before_up(parser, "\x82#{four_byte}#{four_byte}") == "🙂🙂🙂"
+  end
+
+  it "preserves malformed UTF-8 replacement and declared-width consumption" do
+    cases = [
+      {"invalid start", "\x80"},
+      {"invalid continuation", "\xC2\x41"},
+      {"overlong two-byte", "\xC0\x80"},
+      {"overlong three-byte", "\xE0\x80\x80"},
+      {"surrogate", "\xED\xA0\x80"},
+      {"out of range", "\xF4\x90\x80\x80"},
+      {"invalid four-byte lead", "\xF5\x80\x80\x80"},
+    ]
+
+    cases.each do |name, malformed|
+      parser = new_parser
+      text = paste_text_before_up(parser, malformed + "abc")
+      expected = "�abc"
+      raise "#{name} changed: expected #{expected.inspect}, got #{text.inspect}" unless text == expected
+    end
+  end
+
+  it "keeps incomplete declared sequences buffered until complete" do
+    parser = new_parser
+    raise "incomplete 3-byte prefix emitted early" unless parser.feed("\xE2").empty?
+    raise "incomplete 3-byte prefix consumed too soon" unless parser.feed("\x82").empty?
+
+    text = paste_text_before_up(parser, "\xACabc")
+    raise "incomplete sequence recovery changed: #{text.inspect}" unless text == "€abc"
+  end
+
+  it "keeps long non-bracketed burst accumulation amortized-linear" do
+    small = burst_allocation_delta(2_048)
+    large = burst_allocation_delta(8_192)
+
+    # A quadratic append path grows by roughly 16x for a 4x input increase.
+    # Leave room for parser setup and GC noise while rejecting that shape.
+    unless large < small * 6
+      raise "burst allocation scaling is superlinear: 2K=#{small}, 8K=#{large}"
+    end
+  end
+
+  it "keeps bracketed paste finalization within one payload materialization" do
+    payload_bytes = 1_048_576
+    allocated = bracketed_paste_allocation_delta(payload_bytes)
+
+    # The old Array -> Slice -> String finalization allocated well over 4x
+    # the payload at this size. Keep this as an allocation bound, not timing.
+    unless allocated < payload_bytes.to_u64 * 4
+      raise "bracketed paste allocation bound exceeded: #{allocated} for #{payload_bytes} bytes"
+    end
+  end
+
+  it "flushes an ASCII non-bracketed burst as one paste and resets it" do
+    parser = new_parser
+    raise "burst input emitted before timeout" unless parser.feed("abcdef").empty?
+    raise "burst should be pending" unless parser.has_pending_burst?
+
+    event = flush_after_burst_timeout(parser)
+    raise "expected timed-out burst paste, got #{event.inspect}" unless event.is_a?(Tui::PasteEvent) && event.text == "abcdef"
+    raise "burst state should reset after flush" if parser.has_pending_burst?
+
+    parser.feed("xyz")
+    second = flush_after_burst_timeout(parser)
+    raise "reset burst leaked previous text: #{second.inspect}" unless second.is_a?(Tui::PasteEvent) && second.text == "xyz"
+  end
+
+  it "delivers Enter immediately after a timed-out paste burst" do
+    parser = new_parser
+    raise "burst input emitted before timeout" unless parser.feed("abc").empty?
+
+    event = flush_after_burst_timeout(parser)
+    unless event.is_a?(Tui::PasteEvent) && event.text == "abc"
+      raise "expected timed-out burst paste, got #{event.inspect}"
+    end
+
+    events = parser.feed("\r")
+    enter = events.first?
+    unless events.size == 1 && enter.is_a?(Tui::KeyEvent) && enter.char == '\r'
+      raise "Enter was captured by a completed paste burst: #{events.inspect}"
+    end
+    raise "completed paste burst retained pending state" if parser.has_pending_burst?
+  end
+
+  it "keeps Enter inside an active paste burst before timeout" do
+    parser = new_parser
+    raise "active paste burst emitted too early" unless parser.feed("abc\r").empty?
+
+    event = flush_after_burst_timeout(parser)
+    unless event.is_a?(Tui::PasteEvent) && event.text == "abc\n"
+      raise "active paste burst lost Enter: #{event.inspect}"
+    end
+  end
+
+  it "wakes the input loop to flush an active burst" do
+    provider = Tui::MockInputProvider.new
+    provider.push_string("abc")
+    parser = Tui::InputParser.new(provider)
+    parser.start
+
+    begin
+      wakeup = parser.read_event(100.milliseconds)
+      raise "expected burst wakeup, got #{wakeup.inspect}" unless wakeup.is_a?(Tui::WakeupEvent)
+
+      event = parser.flush_paste_burst
+      unless event.is_a?(Tui::PasteEvent) && event.text == "abc"
+        raise "expected timed-out burst paste after wakeup, got #{event.inspect}"
+      end
+      raise "burst should be reset after wakeup flush" if parser.has_pending_burst?
+    ensure
+      parser.stop
+    end
+  end
+
+  it "uses chunk-capable input provider reads in the input loop" do
+    provider = ChunkInputProvider.new("\e[A")
+    parser = Tui::InputParser.new(provider)
+    parser.start
+
+    begin
+      event = parser.read_event(100.milliseconds)
+      unless event.is_a?(Tui::KeyEvent) && event.key == Tui::Key::Up
+        raise "expected Up from chunk input provider, got #{event.inspect}"
+      end
+      raise "input loop did not use read_into" unless provider.read_into_calls > 0
+    ensure
+      parser.stop
+    end
+  end
+
+  it "keeps the byte-only provider fallback working in the input loop" do
+    parser = Tui::InputParser.new(ByteOnlyInputProvider.new("\e[A"))
+    parser.start
+
+    begin
+      event = parser.read_event(100.milliseconds)
+      unless event.is_a?(Tui::KeyEvent) && event.key == Tui::Key::Up
+        raise "expected Up from byte-only input provider, got #{event.inspect}"
+      end
+    ensure
+      parser.stop
+    end
+  end
+
+  it "preserves UTF-8 characters in a non-bracketed burst" do
+    parser = new_parser
+    text = "a中🙂é"
+    raise "unicode burst emitted before timeout" unless parser.feed(text).empty?
+
+    event = flush_after_burst_timeout(parser)
+    raise "expected UTF-8 burst #{text.inspect}, got #{event.inspect}" unless event.is_a?(Tui::PasteEvent) && event.text == text
+  end
+
+  it "keeps delayed feed chunks as separate key events" do
+    parser = new_parser
+    raise "first delayed chunk emitted too early" unless parser.feed("a").empty?
+
+    sleep Tui::InputParser::BURST_CHAR_INTERVAL + 2.milliseconds
+    events = parser.feed("b")
+    unless events.size == 1 && events[0].is_a?(Tui::KeyEvent) && events[0].as(Tui::KeyEvent).char == 'a'
+      raise "delayed feed chunk changed key ordering: #{events.inspect}"
+    end
+
+    event = flush_after_burst_timeout(parser)
+    unless event.is_a?(Tui::KeyEvent) && event.char == 'b'
+      raise "delayed feed chunk should remain a key, got #{event.inspect}"
+    end
+  end
+
+  it "uses the final feed chunk time for delayed UTF-8 completion" do
+    parser = new_parser
+    raise "UTF-8 prefix emitted too early" unless parser.feed("a\xE4").empty?
+
+    sleep Tui::InputParser::BURST_CHAR_INTERVAL + 2.milliseconds
+    events = parser.feed("\xB8\xADb")
+    first = events.first?
+    unless events.size == 1 && first.is_a?(Tui::KeyEvent) && first.char == 'a'
+      raise "delayed UTF-8 completion changed key ordering: #{events.inspect}"
+    end
+
+    event = flush_after_burst_timeout(parser)
+    unless event.is_a?(Tui::KeyEvent) && event.char == '中'
+      raise "delayed UTF-8 completion should use final chunk time, got #{event.inspect}"
+    end
+    event = parser.flush_paste_burst
+    unless event.is_a?(Tui::KeyEvent) && event.char == 'b'
+      raise "delayed UTF-8 tail changed key ordering, got #{event.inspect}"
+    end
+  end
+
+  it "keeps the timer threshold for short input" do
+    parser = new_parser
+    raise "short input emitted too early" unless parser.feed("ab").empty?
+
+    first = flush_after_burst_timeout(parser)
+    second = parser.flush_paste_burst
+    unless first.is_a?(Tui::KeyEvent) && first.char == 'a' && second.is_a?(Tui::KeyEvent) && second.char == 'b'
+      raise "short input should flush as key events, got #{first.inspect}, #{second.inspect}"
+    end
+    raise "short input should be fully flushed" if parser.has_pending_burst?
+  end
+
+  it "delivers Enter immediately after timed-out short input" do
+    parser = new_parser
+    raise "short input emitted before timeout" unless parser.feed("a").empty?
+
+    event = flush_after_burst_timeout(parser)
+    unless event.is_a?(Tui::KeyEvent) && event.char == 'a'
+      raise "expected timed-out short input, got #{event.inspect}"
+    end
+
+    events = parser.feed("\r")
+    enter = events.first?
+    unless events.size == 1 && enter.is_a?(Tui::KeyEvent) && enter.char == '\r'
+      raise "Enter was captured by completed short input: #{events.inspect}"
+    end
+    raise "completed short input retained pending state" if parser.has_pending_burst?
+  end
+
+  it "flushes an active burst before a following key event" do
+    parser = new_parser
+    raise "burst input emitted before key event" unless parser.feed("abc").empty?
+
+    events = parser.feed("\e[A")
+    first = events[0]?
+    second = parser.flush_paste_burst
+    unless events.size == 1 && first.is_a?(Tui::PasteEvent) && second.is_a?(Tui::KeyEvent)
+      raise "burst/key ordering changed: #{events.inspect}"
+    end
+    raise "burst/key payload changed: #{events.inspect}" unless first.as(Tui::PasteEvent).text == "abc" && second.as(Tui::KeyEvent).key == Tui::Key::Up
+    raise "event flush should reset burst state" if parser.has_pending_burst?
+  end
+
+  it "leaves bracketed paste parsing on its existing path" do
+    parser = new_parser
+    event = parser.feed("\e[200~a中\n\e[201~").first?
+    raise "expected bracketed paste event, got #{event.inspect}" unless event.is_a?(Tui::PasteEvent) && event.text == "a中\n"
+    raise "bracketed paste should not leave burst state" if parser.has_pending_burst?
+  end
+
+  it "preserves partial terminators inside bracketed paste payloads" do
+    parser = new_parser
+    text = "before\e[20x中\nafter"
+    event = parser.feed("\e[200~#{text}\e[201~").first?
+
+    raise "partial terminator changed paste payload: #{event.inspect}" unless event.is_a?(Tui::PasteEvent) && event.text == text
+  end
+
+  it "resets bracketed paste storage between empty and consecutive pastes" do
+    parser = new_parser
+    events = parser.feed("\e[200~\e[201~\e[200~next\e[201~\e[A")
+
+    unless events.size == 3 &&
+           events[0].is_a?(Tui::PasteEvent) && events[0].as(Tui::PasteEvent).text.empty? &&
+           events[1].is_a?(Tui::PasteEvent) && events[1].as(Tui::PasteEvent).text == "next" &&
+           events[2].is_a?(Tui::KeyEvent) && events[2].as(Tui::KeyEvent).key == Tui::Key::Up
+      raise "consecutive paste ordering changed: #{events.inspect}"
+    end
+  end
+
   it "decodes Option/Alt+F from an ESC prefix" do
     events = new_parser.feed("\ef")
     raise "expected one event, got #{events.size}" unless events.size == 1
