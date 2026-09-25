@@ -3,6 +3,8 @@ require "set"
 
 module Tui
   class TextEditor < Widget
+    UNDO_LIMIT = 100
+
     struct Cursor
       property line : Int32 = 0
       property col : Int32 = 0
@@ -90,9 +92,10 @@ module Tui
       getter line : Int32
       getter col : Int32
       getter line_ending : String
+      getter view_id : UInt64
       @legacy_text : String?
 
-      def initialize(snapshot : PieceTreeBuffer::Snapshot, @line : Int32, @col : Int32, @line_ending : String)
+      def initialize(snapshot : PieceTreeBuffer::Snapshot, @line : Int32, @col : Int32, @line_ending : String, @view_id : UInt64 = 0_u64)
         @snapshot = snapshot
         @legacy_text = nil
       end
@@ -102,6 +105,7 @@ module Tui
       def initialize(text : String, @line : Int32, @col : Int32)
         @snapshot = nil
         @line_ending = "\n"
+        @view_id = 0_u64
         @legacy_text = text
       end
 
@@ -112,27 +116,111 @@ module Tui
       end
     end
 
+    # Shared text and file state for one logical document. Each TextEditor
+    # keeps its own cursor, selection, viewport, folds, and render callbacks.
+    class Document
+      getter buffer : PieceTreeBuffer
+      property saved_snapshot : PieceTreeBuffer::Snapshot
+      property saved_line_ending : String
+      property modified : Bool
+      property path : Path?
+      property title : String
+      property undo_stack : Array(EditState)
+      property redo_stack : Array(EditState)
+      property last_edit_kind : Symbol?
+      property last_edit_view_id : UInt64?
+      property recording_undo : Bool
+      property line_ending : String
+
+      @on_text_change : Proc(TextChange, Nil)?
+      @on_save : Proc(Path, Nil)?
+      @views : Hash(UInt64, TextEditor) = {} of UInt64 => TextEditor
+      @next_view_id : UInt64 = 0_u64
+
+      def initialize
+        @buffer = PieceTreeBuffer.new
+        @saved_snapshot = @buffer.snapshot
+        @saved_line_ending = "\n"
+        @modified = false
+        @path = nil
+        @title = "Untitled"
+        @undo_stack = [] of EditState
+        @redo_stack = [] of EditState
+        @last_edit_kind = nil
+        @last_edit_view_id = nil
+        @recording_undo = true
+        @line_ending = "\n"
+      end
+
+      def modified? : Bool
+        @modified
+      end
+
+      def title_with_status : String
+        @modified ? "#{@title} *" : @title
+      end
+
+      # There is one document-level publisher, regardless of how many views
+      # are attached. Existing TextEditor callback methods delegate here.
+      def on_text_change(&block : TextChange -> Nil) : Nil
+        @on_text_change = block
+      end
+
+      def on_save(&block : Path -> Nil) : Nil
+        @on_save = block
+      end
+
+      def publish_text_change(change : TextChange, origin_view_id : UInt64) : Nil
+        begin
+          @on_text_change.try &.call(change)
+        ensure
+          refresh_views(origin_view_id, change)
+        end
+      end
+
+      def publish_save(path : Path) : Nil
+        @on_save.try &.call(path)
+      end
+
+      def next_view_id : UInt64
+        @next_view_id &+= 1_u64
+        @next_view_id
+      end
+
+      def attach(view_id : UInt64, view : TextEditor) : Nil
+        @views[view_id] = view
+      end
+
+      def detach(view_id : UInt64) : Nil
+        @views.delete(view_id)
+      end
+
+      def view(view_id : UInt64) : TextEditor?
+        @views[view_id]?
+      end
+
+      def refresh_views(origin_view_id : UInt64? = nil, change : TextChange? = nil) : Nil
+        @views.to_a.each do |view_id, view|
+          next unless @views[view_id]? == view
+          view.document_refreshed(origin_view_id, change)
+        end
+      end
+    end
+
     @buffer : PieceTreeBuffer
-    @saved_snapshot : PieceTreeBuffer::Snapshot
-    @saved_line_ending : String = "\n"
+    @document : Document
+    @view_id : UInt64
+    # Kept as a non-nil inherited alias for existing TextEditor subclasses.
+    # Shared policy is authoritative in Document; document_refreshed syncs it.
+    @line_ending : String
     @cursor : Cursor = Cursor.new
     @selection : Selection?
     @scroll_x : Int32 = 0
     @scroll_y : Int32 = 0
-    @modified : Bool = false
-    @path : Path?
-    @title : String = "Untitled"
     @fold_ranges : Array(FoldRange) = [] of FoldRange
     @collapsed_folds : Set(Int32) = Set(Int32).new
     @hidden_lines : Array(Bool) = [false]
     @fold_starts : Hash(Int32, FoldRange) = {} of Int32 => FoldRange
-    @undo_stack : Array(EditState) = [] of EditState
-    @redo_stack : Array(EditState) = [] of EditState
-    @last_edit_kind : Symbol? = nil
-    @recording_undo : Bool = true
-    @line_ending : String = "\n"
-
-    UNDO_LIMIT = 100
 
     # Style
     property text_fg : Color = Color.white
@@ -155,20 +243,38 @@ module Tui
 
     # Callbacks
     @on_change : Proc(Nil)?
-    @on_text_change : Proc(TextChange, Nil)?
-    @on_save : Proc(Path, Nil)?
     @on_cell_style : Proc(Int32, Int32, Char, Style, Style)?
     @on_hyperclick : Proc(Int32, Int32, Modifiers, Nil)?
     @v_scrollbar : ScrollBar
 
-    def initialize(id : String? = nil)
+    def initialize(id : String? = nil, document : Document = Document.new)
       super(id)
-      @buffer = PieceTreeBuffer.new
-      @saved_snapshot = @buffer.snapshot
+      @document = document
+      @buffer = @document.buffer
+      @view_id = @document.next_view_id
+      @line_ending = @document.line_ending
       @focusable = true
       @v_scrollbar = ScrollBar.new(id ? "#{id}:v-scroll" : "text-editor:v-scroll", ScrollBar::Orientation::Vertical)
       @v_scrollbar.show_arrows = false
       @v_scrollbar.on_scroll { |offset| apply_scrollbar_offset(offset) }
+      @document.attach(@view_id, self)
+    end
+
+    getter document : Document
+
+    def line_ending : String
+      @document.line_ending
+    end
+
+    def line_ending=(value : String) : Nil
+      @document.line_ending = value
+      @line_ending = value
+    end
+
+    # Remove this view from document notifications and view-aware undo cursor
+    # restoration. The shared document and its event publishers remain alive.
+    def detach : Nil
+      @document.detach(@view_id)
     end
 
     def on_change(&block : -> Nil) : Nil
@@ -176,11 +282,11 @@ module Tui
     end
 
     def on_text_change(&block : TextChange -> Nil) : Nil
-      @on_text_change = block
+      @document.on_text_change(&block)
     end
 
     def on_save(&block : Path -> Nil) : Nil
-      @on_save = block
+      @document.on_save(&block)
     end
 
     def on_cell_style(&block : Int32, Int32, Char, Style -> Style) : Nil
@@ -283,15 +389,15 @@ module Tui
     end
 
     def title : String
-      @modified ? "#{@title} *" : @title
+      @document.title_with_status
     end
 
     def modified? : Bool
-      @modified
+      @document.modified?
     end
 
     def path : Path?
-      @path
+      @document.path
     end
 
     # Returns a materialized snapshot. Mutate the editor through its edit API.
@@ -336,10 +442,10 @@ module Tui
       @selection = nil
       @scroll_x = 0
       @scroll_y = 0
-      @modified = true
+      @document.modified = true
       clear_undo_history
       clear_folds
-      mark_dirty!
+      @document.refresh_views(nil, TextChange.full)
     end
 
     def load_file(path : Path) : Bool
@@ -349,12 +455,12 @@ module Tui
         true
       rescue ex
         load_content("Error loading file:\n#{ex.message || "Unknown error"}")
-        @modified = false
-        @saved_snapshot = @buffer.snapshot
-        @saved_line_ending = @line_ending
+        @document.modified = false
+        @document.saved_snapshot = @buffer.snapshot
+        @document.saved_line_ending = @document.line_ending
         clear_undo_history
         clear_folds
-        mark_dirty!
+        @document.refresh_views(nil, TextChange.full)
         false
       end
     end
@@ -377,25 +483,25 @@ module Tui
     # no-op reload does not create a dirty undo entry containing the same text.
     def accept_current_as_saved(path : Path? = nil) : Bool
       if path
-        @path = path
-        @title = path.basename
+        @document.path = path
+        @document.title = path.basename
       end
-      @modified = false
-      @saved_snapshot = @buffer.snapshot
-      @saved_line_ending = @line_ending
-      mark_dirty!
+      @document.modified = false
+      @document.saved_snapshot = @buffer.snapshot
+      @document.saved_line_ending = @document.line_ending
+      @document.refresh_views
       true
     end
 
     def save : Bool
-      return false unless path = @path
+      return false unless path = @document.path
       save_as(path)
     end
 
     # Save the active path after the caller approves the resolved target just
     # before the temporary file is renamed into place.
     def save_checked(&guard : Path -> Bool) : Bool
-      return false unless path = @path
+      return false unless path = @document.path
       save_as_checked(path, &guard)
     end
 
@@ -403,7 +509,7 @@ module Tui
     # atomic replacement. The editor becomes clean only after both predicates
     # accept the resolved physical target.
     def save_checked(before_rename : Proc(Path, Bool), after_rename : Proc(Path, Bool)) : Bool
-      return false unless path = @path
+      return false unless path = @document.path
       save_as_checked(path, before_rename, after_rename)
     end
 
@@ -421,17 +527,21 @@ module Tui
     # pre-rename predicate leaves the target untouched; a failed post-rename
     # predicate leaves the editor dirty and suppresses the save callback.
     def save_as_checked(path : Path, before_rename : Proc(Path, Bool), after_rename : Proc(Path, Bool)) : Bool
+      # A retired widget may still be held by an asynchronous callback. It
+      # must not write an obsolete document over the live file.
+      return false unless @document.view(@view_id).try(&.same?(self))
+
       begin
         target = atomic_write(path, before_rename) { |io| @buffer.write_to(io) }
         return false unless target
         return false unless after_rename.call(target)
-        @path = path
-        @title = path.basename
-        @modified = false
-        @saved_snapshot = @buffer.snapshot
-        @saved_line_ending = @line_ending
-        @on_save.try &.call(path)
-        mark_dirty!
+        @document.path = path
+        @document.title = path.basename
+        @document.modified = false
+        @document.saved_snapshot = @buffer.snapshot
+        @document.saved_line_ending = @document.line_ending
+        @document.publish_save(path)
+        @document.refresh_views
         true
       rescue
         false
@@ -481,7 +591,7 @@ module Tui
       begin_edit(nil)
       line = @cursor.line
       col = @cursor.col
-      @line_ending = detect_line_ending(content)
+      @document.line_ending = detect_line_ending(content)
       @buffer.replace_all(content)
       @cursor.line = line.clamp(0, line_count - 1)
       @cursor.col = col.clamp(0, line_length(@cursor.line))
@@ -491,29 +601,31 @@ module Tui
     end
 
     def can_undo? : Bool
-      !@undo_stack.empty?
+      !@document.undo_stack.empty?
     end
 
     def can_redo? : Bool
-      !@redo_stack.empty?
+      !@document.redo_stack.empty?
     end
 
     def undo : Bool
-      return false if @undo_stack.empty?
+      return false if @document.undo_stack.empty?
 
-      @redo_stack << current_edit_state
-      state = @undo_stack.pop
-      @last_edit_kind = nil
+      @document.redo_stack << current_edit_state
+      state = @document.undo_stack.pop
+      @document.last_edit_kind = nil
+      @document.last_edit_view_id = nil
       restore_edit_state(state)
       true
     end
 
     def redo : Bool
-      return false if @redo_stack.empty?
+      return false if @document.redo_stack.empty?
 
-      @undo_stack << current_edit_state
-      state = @redo_stack.pop
-      @last_edit_kind = nil
+      @document.undo_stack << current_edit_state
+      state = @document.redo_stack.pop
+      @document.last_edit_kind = nil
+      @document.last_edit_view_id = nil
       restore_edit_state(state)
       true
     end
@@ -523,7 +635,10 @@ module Tui
       has_sel = selection_active?
       if record_undo
         begin_edit(has_sel ? nil : :insert)
-        @last_edit_kind = :insert if has_sel
+        if has_sel
+          @document.last_edit_kind = :insert
+          @document.last_edit_view_id = @view_id
+        end
       end
       selection_change = delete_selection_content(false) if @selection
       start_position = selection_change.try(&.[0]) || current_text_position
@@ -879,16 +994,189 @@ module Tui
     end
 
     private def text_changed(change : TextChange) : Nil
-      @modified = true
-      clear_folds if @fold_ranges.any?
+      @document.modified = true
       notify_text_change(change)
     end
 
     private def notify_text_change(change : TextChange) : Nil
-      @on_text_change.try &.call(change)
+      @document.publish_text_change(change, @view_id)
+    end
+
+    # Called by the shared document after any view mutates its text. Keep this
+    # view's local position valid and repaint it without replacing its cursor
+    # with the editing view's cursor.
+    def document_refreshed(origin_view_id : UInt64? = nil, change : TextChange? = nil) : Nil
+      @line_ending = @document.line_ending
+      if origin_view_id != @view_id
+        if update = change
+          if update.incremental?
+            rebase_view_state(update)
+          else
+            @selection = nil
+            clear_folds
+          end
+        end
+      end
+      previous_cursor = {@cursor.line, @cursor.col}
+      @cursor.line = @cursor.line.clamp(0, line_count - 1)
+      @cursor.col = @cursor.col.clamp(0, line_length(@cursor.line))
+      cursor_clamped = previous_cursor != {@cursor.line, @cursor.col}
+      @scroll_y = @scroll_y.clamp(0, line_count - 1)
+      if origin_view_id == @view_id
+        clear_folds if @fold_ranges.any? || @collapsed_folds.any?
+      elsif @fold_ranges.any? { |range| range.end_line >= line_count }
+        set_fold_ranges(@fold_ranges.select { |range| range.end_line < line_count })
+      end
+      if selection = @selection
+        @selection = nil unless valid_position?(selection.start_line, selection.start_col) &&
+                                valid_position?(selection.end_line, selection.end_col)
+      end
       @on_change.try &.call
-      ensure_cursor_visible
+      ensure_cursor_visible if origin_view_id == @view_id || cursor_clamped
       mark_dirty!
+    end
+
+    private def rebase_view_state(change : TextChange) : Nil
+      return unless start = change.start
+      return unless finish = change.finish
+
+      change_start = {start.line, start.column}
+      change_finish = {finish.line, finish.column}
+      inserted_end = position_after_text(change_start, change.text)
+
+      @cursor.line, @cursor.col = rebase_coordinate(
+        {@cursor.line, @cursor.col}, change_start, change_finish, inserted_end, true
+      )
+
+      if selection = @selection
+        rebase_selection(selection, change_start, change_finish, inserted_end)
+      end
+
+      rebase_fold_ranges(change_start, change_finish, inserted_end)
+    end
+
+    private def rebase_selection(selection : Selection, change_start : Tuple(Int32, Int32), change_finish : Tuple(Int32, Int32), inserted_end : Tuple(Int32, Int32)) : Nil
+      normalized = selection.normalize
+      selection_start = {normalized.start_line, normalized.start_col}
+      selection_end = {normalized.end_line, normalized.end_col}
+      insertion = change_start == change_finish
+
+      overlaps = if insertion
+                   compare_coordinates(change_start, selection_start) > 0 &&
+                     compare_coordinates(change_start, selection_end) < 0
+                 else
+                   compare_coordinates(change_start, selection_end) < 0 &&
+                     compare_coordinates(change_finish, selection_start) > 0
+                 end
+      if overlaps
+        @selection = nil
+        return
+      end
+
+      rebased_start = rebase_coordinate(selection_start, change_start, change_finish, inserted_end, true)
+      end_right_bias = !(insertion && change_start == selection_end)
+      rebased_end = rebase_coordinate(selection_end, change_start, change_finish, inserted_end, end_right_bias)
+
+      if compare_coordinates({selection.start_line, selection.start_col}, {selection.end_line, selection.end_col}) > 0
+        @selection = Selection.new(rebased_end[0], rebased_end[1], rebased_start[0], rebased_start[1])
+      else
+        @selection = Selection.new(rebased_start[0], rebased_start[1], rebased_end[0], rebased_end[1])
+      end
+    end
+
+    private def rebase_fold_ranges(change_start : Tuple(Int32, Int32), change_finish : Tuple(Int32, Int32), inserted_end : Tuple(Int32, Int32)) : Nil
+      return if @fold_ranges.empty?
+
+      line_delta = inserted_end[0] - change_finish[0]
+      changed = false
+      ranges = [] of FoldRange
+      collapsed = Set(Int32).new
+
+      @fold_ranges.each do |range|
+        if change_finish[0] < range.start_line
+          start_line = range.start_line + line_delta
+          end_line = range.end_line + line_delta
+          next_range = FoldRange.new(start_line, end_line)
+          ranges << next_range
+          collapsed.add(start_line) if @collapsed_folds.includes?(range.start_line)
+          changed ||= line_delta != 0
+        elsif change_start[0] > range.end_line
+          ranges << range
+          collapsed.add(range.start_line) if @collapsed_folds.includes?(range.start_line)
+        else
+          changed = true
+        end
+      end
+
+      return unless changed
+
+      @fold_ranges = ranges
+      @fold_starts = {} of Int32 => FoldRange
+      @fold_ranges.each do |range|
+        existing = @fold_starts[range.start_line]?
+        if existing.nil? || range.end_line > existing.end_line
+          @fold_starts[range.start_line] = range
+        end
+      end
+      @collapsed_folds = collapsed
+      rebuild_hidden_lines!
+    end
+
+    private def rebase_coordinate(position : Tuple(Int32, Int32), change_start : Tuple(Int32, Int32), change_finish : Tuple(Int32, Int32), inserted_end : Tuple(Int32, Int32), right_bias : Bool) : Tuple(Int32, Int32)
+      return position if compare_coordinates(position, change_start) < 0
+
+      if change_start == change_finish
+        return position if position == change_start && !right_bias
+        return position_after_change(position, change_finish, inserted_end)
+      end
+
+      return position if position == change_start
+      return change_start if compare_coordinates(position, change_finish) < 0
+
+      position_after_change(position, change_finish, inserted_end)
+    end
+
+    private def position_after_change(position : Tuple(Int32, Int32), old_end : Tuple(Int32, Int32), new_end : Tuple(Int32, Int32)) : Tuple(Int32, Int32)
+      if position[0] == old_end[0]
+        {new_end[0], new_end[1] + position[1] - old_end[1]}
+      else
+        {position[0] + new_end[0] - old_end[0], position[1]}
+      end
+    end
+
+    private def position_after_text(start : Tuple(Int32, Int32), text : String) : Tuple(Int32, Int32)
+      line = start[0]
+      column = start[1]
+      pending_carriage_return = false
+
+      text.each_char do |char|
+        if pending_carriage_return
+          line += 1
+          column = 0
+          pending_carriage_return = false
+          next if char == '\n'
+        end
+
+        if char == '\r'
+          pending_carriage_return = true
+        elsif char == '\n'
+          line += 1
+          column = 0
+        else
+          column += 1
+        end
+      end
+
+      if pending_carriage_return
+        line += 1
+        column = 0
+      end
+      {line, column}
+    end
+
+    private def compare_coordinates(left : Tuple(Int32, Int32), right : Tuple(Int32, Int32)) : Int32
+      return left[0] <=> right[0] unless left[0] == right[0]
+      left[1] <=> right[1]
     end
 
     private def selection_active? : Bool
@@ -899,48 +1187,52 @@ module Tui
       end
     end
 
+    private def valid_position?(line : Int32, col : Int32) : Bool
+      line >= 0 && line < line_count && col >= 0 && col <= line_length(line)
+    end
+
     private def current_edit_state : EditState
-      EditState.new(@buffer.snapshot, @cursor.line, @cursor.col, @line_ending)
+      EditState.new(@buffer.snapshot, @cursor.line, @cursor.col, @document.line_ending, @view_id)
     end
 
     private def clear_undo_history : Nil
-      @undo_stack.clear
-      @redo_stack.clear
-      @last_edit_kind = nil
+      @document.undo_stack.clear
+      @document.redo_stack.clear
+      @document.last_edit_kind = nil
+      @document.last_edit_view_id = nil
     end
 
     private def begin_edit(kind : Symbol?) : Nil
-      return unless @recording_undo
-      if kind && kind == @last_edit_kind && !@undo_stack.empty?
+      return unless @document.recording_undo
+      if kind && kind == @document.last_edit_kind && @view_id == @document.last_edit_view_id && !@document.undo_stack.empty?
         return
       end
 
-      @undo_stack << current_edit_state
-      @undo_stack.shift if @undo_stack.size > UNDO_LIMIT
-      @redo_stack.clear
-      @last_edit_kind = kind
+      @document.undo_stack << current_edit_state
+      @document.undo_stack.shift if @document.undo_stack.size > UNDO_LIMIT
+      @document.redo_stack.clear
+      @document.last_edit_kind = kind
+      @document.last_edit_view_id = @view_id
     end
 
     private def restore_edit_state(state : EditState) : Nil
-      @recording_undo = false
+      @document.recording_undo = false
       if snapshot = state.snapshot
         @buffer.restore(snapshot)
-        @line_ending = state.line_ending
+        @document.line_ending = state.line_ending
       else
         load_content(state.text)
       end
-      @cursor.line = state.line.clamp(0, line_count - 1)
-      @cursor.col = state.col.clamp(0, line_length(@cursor.line))
-      @selection = nil
-      @modified = !saved_state?
-      clear_folds if @fold_ranges.any?
+      view = @document.view(state.view_id) || self
+      view.set_cursor(state.line, state.col)
+      @document.modified = !saved_state?
       notify_text_change(TextChange.full)
     ensure
-      @recording_undo = true
+      @document.recording_undo = true
     end
 
     private def load_content(content : String) : Nil
-      @line_ending = detect_line_ending(content)
+      @document.line_ending = detect_line_ending(content)
       @buffer.reset(content)
     end
 
@@ -955,7 +1247,7 @@ module Tui
         # retain an unbounded chain of complete external revisions.
         clear_undo_history
         begin_edit(nil)
-        @line_ending = detect_line_ending(content)
+        @document.line_ending = detect_line_ending(content)
         @buffer.replace_all(content)
         @cursor.line = old_line.clamp(0, line_count - 1)
         @cursor.col = old_col.clamp(0, line_length(@cursor.line))
@@ -970,18 +1262,18 @@ module Tui
       end
 
       if path
-        @path = path
-        @title = path.basename
+        @document.path = path
+        @document.title = path.basename
       end
-      @modified = false
-      @saved_snapshot = @buffer.snapshot
-      @saved_line_ending = @line_ending
+      @document.modified = false
+      @document.saved_snapshot = @buffer.snapshot
+      @document.saved_line_ending = @document.line_ending
       clear_folds
       ensure_cursor_visible
       if notify
         notify_text_change(TextChange.full)
       else
-        mark_dirty!
+        @document.refresh_views(nil, TextChange.full)
       end
       true
     end
@@ -1034,7 +1326,7 @@ module Tui
     private def encode_newlines(content : String, offset : Int32) : String
       return content unless content.includes?('\n')
 
-      ending = @line_ending
+      ending = @document.line_ending
       previous_is_cr = offset > 0 && @buffer.byte_at_offset(offset - 1) == '\r'.ord
       next_is_lf = @buffer.byte_at_offset(offset) == '\n'.ord
       if (content.starts_with?("\n") && ending.starts_with?("\n") && previous_is_cr) ||
@@ -1053,7 +1345,7 @@ module Tui
                    @buffer.byte_at_offset(finish) == '\n'.ord
       if joins_crlf
         @buffer.delete(offset, length + 1)
-        replacement = @line_ending == "\n" ? "\n\n" : "\r\n"
+        replacement = @document.line_ending == "\n" ? "\n\n" : "\r\n"
         @buffer.insert(offset, replacement)
         false
       else
@@ -1074,7 +1366,7 @@ module Tui
     end
 
     private def saved_state? : Bool
-      @line_ending == @saved_line_ending && @buffer.same_state?(@saved_snapshot)
+      @document.line_ending == @document.saved_line_ending && @buffer.same_state?(@document.saved_snapshot)
     end
 
     private def detect_line_ending(content : String) : String
@@ -1086,7 +1378,7 @@ module Tui
       candidates << {crlf, "\r\n"} if crlf
       candidates << {lf, "\n"} if lf && (crlf.nil? || lf != crlf)
       candidates << {cr, "\r"} if cr && (crlf.nil? || cr != crlf)
-      candidates.min_by?(&.[0]).try(&.[1]) || @line_ending
+      candidates.min_by?(&.[0]).try(&.[1]) || @document.line_ending
     end
 
     private def update_selection_start : Nil
